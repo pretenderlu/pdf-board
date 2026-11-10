@@ -1037,9 +1037,11 @@ export class Board {
 
     const sel = [...this.selected];
     let pool;
-    if (sel.length >= 2) pool = sel;                 // 只排选中的
-    else if (sel.length === 1) return false;         // 只选中 1 个：不动
-    else pool = this.items.map((it) => it.id);       // 没选中：排全部
+    // 选中 ≥2 个 → 只排选中的；否则（没选 / 只选了 1 个）→ 排全部。
+    // 之所以把"只选中 1 个"也归到排全部：贴完最后一张图后它会保持选中状态，
+    // 这时用户点"排列"显然是想整理整块板，而不是什么都不发生。
+    if (sel.length >= 2) pool = sel;
+    else pool = this.items.map((it) => it.id);
     if (pool.length < 2) return false;
 
     const poolIds = new Set(pool);
@@ -1410,7 +1412,7 @@ export class Board {
     this.arrangeMenu = ce('div', 'bp-menu');
     this.arrangeMenu.hidden = true;
     this.arrangeMenu.setAttribute('role', 'menu');
-    this.arrangeMenu.appendChild(ce('div', 'bp-menu-hint', '未选中时排列全部内容'));
+    this.arrangeMenu.appendChild(ce('div', 'bp-menu-hint', '选中 2 个以上只排选中的，否则排全部'));
     const menuGroups = [
       ['对齐', [['alignLeft', '左对齐'], ['alignTop', '顶部对齐']]],
       ['排布', [['vertical', '竖向排列'], ['horizontal', '横向排列'], ['grid', '网格排列'], ['twoCols', '两列排列'], ['mindmap', '思维导图']]],
