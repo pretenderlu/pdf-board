@@ -442,6 +442,14 @@
   font-weight: 600;
 }
 
+/* 页面条里的迷你分段按钮（竖向 | 横向） */
+.bp-seg-sm { padding: 1px; }
+
+.bp-seg-sm .bp-seg-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
 /* A4 模式浮动页面条 */
 .bp-pagebar {
   position: absolute;

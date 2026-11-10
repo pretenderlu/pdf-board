@@ -37,9 +37,11 @@ const CONNECTOR_COLOR = '#9aa4b2';   // 灰色细曲线
 const CONNECTOR_WIDTH = 2;
 const CONNECTOR_MARGIN = 6;          // 端点裁到元素边框外 6px
 // A4 页面模式：纸张只是画在无限画布上的参考格（世界坐标不变）
-const A4_PAGE_W = 794;               // 96dpi 下 A4 = 210×297mm
+const A4_PAGE_W = 794;               // 竖向 96dpi A4 = 210×297mm
 const A4_PAGE_H = 1123;
-const A4_PAGE_GAP = 48;              // 页间距（世界像素）
+const A4_LANDSCAPE_W = 1123;         // 横向 A4 = 297×210mm
+const A4_LANDSCAPE_H = 794;
+const A4_PAGE_GAP = 48;              // 页间距（世界像素，多页始终纵向排列）
 const MAX_PAGES = 20;                // 最多 20 页
 const TEXT_COLOR = '#1f2329';
 const MAX_TEXT_WIDTH = 460;          // 文字元素自动排版的最大宽度（世界坐标）
@@ -313,11 +315,12 @@ export function sanitizeData(raw) {
     if (it.kind !== 'connector') continue;
     if (!elemIds.has(it.fromId) || !elemIds.has(it.toId)) items.splice(i, 1);
   }
-  // A4 页面模式（旧数据缺字段 → infinite / 1 页 / 第 0 页）
+  // A4 页面模式（旧数据缺字段 → infinite / 1 页 / 第 0 页 / 竖向）
   const pageMode = src.pageMode === 'a4' ? 'a4' : 'infinite';
   const pageCount = clamp(Math.round(finite(src.pageCount, 1)), 1, MAX_PAGES);
   const curPage = clamp(Math.round(finite(src.curPage, 0)), 0, pageCount - 1);
-  return { version: 1, view, items, pageMode, pageCount, curPage };
+  const pageOrientation = src.pageOrientation === 'landscape' ? 'landscape' : 'portrait';
+  return { version: 1, view, items, pageMode, pageCount, curPage, pageOrientation };
 }
 
 /* ======================= 小工具 ======================= */
@@ -537,6 +540,7 @@ export class Board {
     this._pageMode = 'infinite';
     this._pageCount = 1;
     this._curPage = 0;                 // 0-based，范围 0..pageCount-1
+    this._pageOrientation = 'portrait'; // 'portrait' | 'landscape'
     this._pageWrapToastAt = 0;         // 「页底回卷」提示节流
 
     // 编辑态
@@ -992,6 +996,7 @@ export class Board {
       pageMode: this._pageMode,
       pageCount: this._pageCount,
       curPage: this._curPage,
+      pageOrientation: this._pageOrientation,
       items: this.items.map(cloneItem),
     };
   }
@@ -1063,12 +1068,41 @@ export class Board {
     return this._pageMode;
   }
 
+  getPageOrientation() {
+    return this._pageOrientation;
+  }
+
+  /** 切换纸张方向：元素世界坐标不动，只重画纸张 + 平移视图让当前页可见（不改缩放） */
+  setPageOrientation(orient) {
+    const next = orient === 'landscape' ? 'landscape' : 'portrait';
+    if (next === this._pageOrientation) return false;
+    this._pageOrientation = next;
+    this._syncPageUI();
+    this._centerPageInView();
+    this.scheduleSave();
+    this._toast(
+      next === 'landscape'
+        ? '已切换为横向 A4（页面位置变了，内容不动）'
+        : '已切换为竖向 A4（页面位置变了，内容不动）',
+      2600,
+    );
+    return true;
+  }
+
+  /** 当前方向下一页的世界尺寸 */
+  _pageDims() {
+    return this._pageOrientation === 'landscape'
+      ? { w: A4_LANDSCAPE_W, h: A4_LANDSCAPE_H }
+      : { w: A4_PAGE_W, h: A4_PAGE_H };
+  }
+
   /** 各页的世界矩形（多页纵向排列；与是否处于 A4 模式无关，供导出用） */
   pageRects() {
+    const dims = this._pageDims();
     const n = clamp(Math.round(finite(this._pageCount, 1)), 1, MAX_PAGES);
     const rects = [];
     for (let i = 0; i < n; i++) {
-      rects.push({ x: 0, y: i * (A4_PAGE_H + A4_PAGE_GAP), w: A4_PAGE_W, h: A4_PAGE_H });
+      rects.push({ x: 0, y: i * (dims.h + A4_PAGE_GAP), w: dims.w, h: dims.h });
     }
     return rects;
   }
@@ -1080,6 +1114,9 @@ export class Board {
     }
     if (this.pageBar) this.pageBar.hidden = !a4;
     if (this.pageLabelEl) this.pageLabelEl.textContent = `第 ${this._curPage + 1} / ${this._pageCount} 页`;
+    if (this.orientBtns) {
+      for (const [orient, btn] of this.orientBtns) btn.classList.toggle('bp-on', orient === this._pageOrientation);
+    }
     if (this.pagePrevBtn) this.pagePrevBtn.disabled = this._curPage <= 0;
     if (this.pageNextBtn) this.pageNextBtn.disabled = this._curPage >= this._pageCount - 1;
     if (this.pageDelBtn) this.pageDelBtn.disabled = this._pageCount <= 1;
@@ -1160,7 +1197,8 @@ export class Board {
 
   /** A4 模式下的落位：限制在当前页内，列式下落，触底回卷到页顶 */
   _placeForInPage(w, h) {
-    const page = this.pageRects()[this._curPage] || { x: 0, y: 0, w: A4_PAGE_W, h: A4_PAGE_H };
+    const dims = this._pageDims();
+    const page = this.pageRects()[this._curPage] || { x: 0, y: 0, w: dims.w, h: dims.h };
     const margin = 24;
     const x = w <= page.w - margin * 2
       ? clamp(page.x + margin, page.x, page.x + page.w - w)
@@ -1739,7 +1777,22 @@ export class Board {
     this.pageNextBtn.addEventListener('click', () => this.setCurPage(this._curPage + 1));
     this.pageAddBtn.addEventListener('click', () => this.addPage());
     this.pageDelBtn.addEventListener('click', () => this.removePage());
-    this.pageBar.append(this.pagePrevBtn, this.pageLabelEl, this.pageNextBtn, this.pageAddBtn, this.pageDelBtn);
+
+    // 纸张方向：竖向 | 横向（放在页码右边、添加页左边）
+    const orientSeg = ce('div', 'bp-seg bp-seg-sm');
+    orientSeg.setAttribute('role', 'group');
+    orientSeg.setAttribute('aria-label', '纸张方向');
+    this.orientBtns = new Map();
+    for (const [orient, label] of [['portrait', '竖向'], ['landscape', '横向']]) {
+      const b = ce('button', 'btn bp-seg-btn', label);
+      b.type = 'button';
+      b.dataset.orient = orient;
+      b.title = orient === 'portrait' ? '竖向 A4（794×1123）' : '横向 A4（1123×794）';
+      b.addEventListener('click', () => this.setPageOrientation(orient));
+      orientSeg.appendChild(b);
+      this.orientBtns.set(orient, b);
+    }
+    this.pageBar.append(this.pagePrevBtn, this.pageLabelEl, this.pageNextBtn, orientSeg, this.pageAddBtn, this.pageDelBtn);
     this.root.appendChild(this.pageBar);
 
     this.toolBtns.get('select').classList.add('bp-on');
@@ -3846,6 +3899,7 @@ export class Board {
     this._pageMode = clean.pageMode;
     this._pageCount = clean.pageCount;
     this._curPage = clean.curPage;
+    this._pageOrientation = clean.pageOrientation;
     this.selected.clear();
     this._renderAll();
     this._applyView();
@@ -3925,6 +3979,7 @@ export class Board {
     this._pageMode = clean.pageMode;
     this._pageCount = clean.pageCount;
     this._curPage = clean.curPage;
+    this._pageOrientation = clean.pageOrientation;
     return clean;
   }
 

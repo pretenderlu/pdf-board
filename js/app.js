@@ -697,23 +697,33 @@ async function exportPagePNG() {
   return true;
 }
 
+function pageOrientation() {
+  try {
+    return board && typeof board.getPageOrientation === 'function' && board.getPageOrientation() === 'landscape'
+      ? 'landscape'
+      : 'portrait';
+  } catch { return 'portrait'; }
+}
+
 async function exportPagesPDF() {
   const rects = pageRectsSafe();
   if (!rects) return false;
-  const pageW = A4_PORTRAIT.w;
-  const pageH = A4_PORTRAIT.h;
+  // 横向 A4：宽高互换（841.89 × 595.28 pt）
+  const landscape = pageOrientation() === 'landscape';
+  const pageW = landscape ? A4_PORTRAIT.h : A4_PORTRAIT.w;
+  const pageH = landscape ? A4_PORTRAIT.w : A4_PORTRAIT.h;
   const pages = [];
   for (const r of rects) {
     const c = await board.renderToCanvas({ rect: r, scale: 2, background: '#ffffff' });
     if (!c || !c.width) continue;
     const jpeg = await canvasToJpegBytes(c, 0.92);
-    // A4 页与 PDF 页面同比例（794:1123 ≈ 595.28:841.89），整页铺满，所见即所得
+    // 纸张与 PDF 页面同比例（794:1123 ≈ 595.28:841.89），整页铺满，所见即所得
     pages.push({ jpeg, pxW: c.width, pxH: c.height, drawW: pageW, drawH: pageH, drawX: 0, drawY: 0 });
   }
   if (!pages.length) { toast('没有可导出的页面'); return false; }
   const bytes = buildPdf({ pages, pageW, pageH });
   downloadBlob(new Blob([bytes], { type: 'application/pdf' }), `白板-${stamp()}.pdf`);
-  toast(`已导出 PDF（${pages.length} 页 A4，按页面排版 1:1 输出）`, 3000);
+  toast(`已导出 PDF（${pages.length} 页 A4${landscape ? ' 横向' : ''}，按页面排版 1:1 输出）`, 3000);
   return true;
 }
 
