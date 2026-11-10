@@ -32,6 +32,10 @@ const GRID_BASE = 24;                // 网格基准间距（世界坐标）
 const SAVE_DELAY = 500;              // 自动保存防抖
 const ARRANGE_GAP = 24;              // 排列统一间距（世界像素）
 const ARRANGE_ROW_TOL = 14;          // 阅读顺序判定「同一行」的 y 容差（约半行高）
+// 思维导图连线（connector：派生笔画，端点随元素现算，不存坐标）
+const CONNECTOR_COLOR = '#9aa4b2';   // 灰色细曲线
+const CONNECTOR_WIDTH = 2;
+const CONNECTOR_MARGIN = 6;          // 端点裁到元素边框外 6px
 const TEXT_COLOR = '#1f2329';
 const MAX_TEXT_WIDTH = 460;          // 文字元素自动排版的最大宽度（世界坐标）
 const MIN_TEXT_WIDTH = 40;
@@ -218,6 +222,24 @@ function sanitizeItem(raw, index) {
   }
 
   if (type === 'stroke') {
+    // 思维导图连线：端点由 fromId/toId 现算，不存 points/bbox
+    if (raw.kind === 'connector') {
+      const fromId = typeof raw.fromId === 'string' ? raw.fromId : '';
+      const toId = typeof raw.toId === 'string' ? raw.toId : '';
+      if (!fromId || !toId || fromId === toId) return null;
+      return {
+        id: strId(raw.id),
+        type: 'stroke',
+        kind: 'connector',
+        z,
+        fromId,
+        toId,
+        color: colorOr(raw.color, CONNECTOR_COLOR),
+        width: clamp(finite(raw.width, CONNECTOR_WIDTH), 0.5, 40),
+        opacity: clamp(finite(raw.opacity, 1), 0.02, 1),
+        tool: 'connector',
+      };
+    }
     const pts = Array.isArray(raw.points) ? raw.points : [];
     const points = [];
     for (const p of pts) {
@@ -279,6 +301,13 @@ export function sanitizeData(raw) {
     const parent = byId.get(it.parentId);
     if (!parent || parent.type === 'stroke') it.parentId = null;
   }
+  // 连线：两端必须都是存在的元素（图片/文字），否则丢弃（悬空自愈）
+  const elemIds = new Set(items.filter((it) => it.type !== 'stroke').map((it) => it.id));
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind !== 'connector') continue;
+    if (!elemIds.has(it.fromId) || !elemIds.has(it.toId)) items.splice(i, 1);
+  }
   return { version: 1, view, items };
 }
 
@@ -313,6 +342,10 @@ const ICON = {
 
 /** 元素快照克隆：points 深拷贝，src / text 字符串共享引用（省内存） */
 function cloneItem(it) {
+  if (it.kind === 'connector') {
+    // 连线不存坐标：端点由 fromId/toId 在渲染时现算，克隆只需浅拷贝
+    return { ...it };
+  }
   if (it.type === 'stroke') {
     return {
       ...it,
@@ -1028,7 +1061,7 @@ export class Board {
 
   /**
    * 一键排列 / 对齐（一次排列 = 一次撤销）。
-   * @param {'alignLeft'|'alignTop'|'vertical'|'horizontal'|'grid'|'twoCols'|'mindmap'} kind
+   * @param {'alignLeft'|'alignTop'|'vertical'|'horizontal'|'grid'|'twoCols'|'mindmap'|'mindmapLinks'} kind
    * @returns {boolean} 是否真的移动了元素
    */
   arrange(kind) {
@@ -1049,6 +1082,8 @@ export class Board {
     for (const id of pool) {
       const it = this.get(id);
       if (!it) continue;
+      // 思维导图连线不参与排布（端点随元素重算）
+      if (it.kind === 'connector') continue;
       // 归属父元素的笔画跟着父元素走（父元素也在本次排列范围内），不单独排
       if (it.type === 'stroke' && it.parentId && poolIds.has(it.parentId)) continue;
       layout.push(it);
@@ -1077,17 +1112,21 @@ export class Board {
     const targets = new Map();     // id -> {x, y}
     const setTarget = (it, x, y) => targets.set(it.id, { x, y });
 
-    if (kind === 'alignLeft') {
+    // 「思维导图（带连线）」= 放射状布局 + 建线；其它 kind 直接按本身处理
+    const withLinks = kind === 'mindmapLinks';
+    const layoutKind = withLinks ? 'mindmap' : kind;
+
+    if (layoutKind === 'alignLeft') {
       for (const it of order) setTarget(it, ax, it.y);
-    } else if (kind === 'alignTop') {
+    } else if (layoutKind === 'alignTop') {
       for (const it of order) setTarget(it, it.x, ay);
-    } else if (kind === 'vertical') {
+    } else if (layoutKind === 'vertical') {
       let y = ay;
       for (const it of order) { setTarget(it, ax, y); y += bbox(it).h + gap; }
-    } else if (kind === 'horizontal') {
+    } else if (layoutKind === 'horizontal') {
       let x = ax;
       for (const it of order) { setTarget(it, x, ay); x += bbox(it).w + gap; }
-    } else if (kind === 'grid') {
+    } else if (layoutKind === 'grid') {
       const cols = Math.max(1, Math.ceil(Math.sqrt(order.length)));
       let maxW = 0;
       let maxH = 0;
@@ -1101,7 +1140,7 @@ export class Board {
       order.forEach((it, i) => {
         setTarget(it, ax + (i % cols) * colW, ay + Math.floor(i / cols) * rowH);
       });
-    } else if (kind === 'twoCols') {
+    } else if (layoutKind === 'twoCols') {
       // 按顺序累加高度，取最接近「总高一半」的位置分列
       const total = order.reduce((sum, it, i) => sum + bbox(it).h + (i ? gap : 0), 0);
       const half = total / 2;
@@ -1121,7 +1160,7 @@ export class Board {
       for (const it of col1) { setTarget(it, ax, y1); y1 += bbox(it).h + gap; }
       let y2 = ay;
       for (const it of col2) { setTarget(it, ax + maxW1 + gap, y2); y2 += bbox(it).h + gap; }
-    } else if (kind === 'mindmap') {
+    } else if (layoutKind === 'mindmap') {
       // 放射状：中心节点不动，其余等角度分布在环上（起始 -90° 正上方，顺时针）
       const center = order[0];
       const cb = bbox(center);            // 中心节点位置不变
@@ -1197,6 +1236,35 @@ export class Board {
       return false;
     }
 
+    // 「思维导图（带连线）」：先清理本次涉及元素间的旧连线，再按新布局重建（幂等）
+    let linkPlan = null;
+    if (withLinks) {
+      const center = order[0];
+      const involved = new Set(order.map((o) => o.id));
+      const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+      const wanted = new Map();
+      for (const sat of order.slice(1)) {
+        wanted.set(pairKey(center.id, sat.id), { fromId: center.id, toId: sat.id });
+      }
+      const keepKeys = new Set();
+      const remove = [];
+      for (const it of this.items) {
+        if (it.kind !== 'connector') continue;
+        const key = pairKey(it.fromId, it.toId);
+        const want = wanted.get(key);
+        if (!want) {
+          // 只清理"本次涉及元素之间"的旧线，其它连线保持不动
+          if (involved.has(it.fromId) && involved.has(it.toId)) remove.push(it);
+          continue;
+        }
+        if (it.fromId === want.fromId && it.toId === want.toId && !keepKeys.has(key)) keepKeys.add(key);
+        else remove.push(it);          // 方向不对 / 重复线 → 重建
+      }
+      const create = [];
+      for (const [key, want] of wanted) if (!keepKeys.has(key)) create.push(want);
+      linkPlan = { remove, create, changed: remove.length > 0 || create.length > 0 };
+    }
+
     // 先算位移；全都没动就不记历史（单元素/已排好时 no-op）
     const moves = [];
     for (const [id, t] of targets) {
@@ -1209,7 +1277,7 @@ export class Board {
       if (!dx && !dy) continue;
       moves.push({ it, nx, ny, dx, dy });
     }
-    if (!moves.length) return false;
+    if (!moves.length && !(linkPlan && linkPlan.changed)) return false;
 
     this._record('arrange');        // 一次排列 = 一次撤销（快照在改动/解绑之前）
 
@@ -1231,6 +1299,15 @@ export class Board {
     // 被单独排布的绑定笔画：解绑（避免之后又跟着原父元素走）——已包含在撤销快照里
     for (const m of moves) {
       if (m.it.type === 'stroke' && m.it.parentId) m.it.parentId = null;
+    }
+
+    // 建线 / 清理旧线（与布局同属一次撤销）
+    if (linkPlan) {
+      if (linkPlan.remove.length) {
+        const drop = new Set(linkPlan.remove);
+        this.items = this.items.filter((it) => !drop.has(it));
+      }
+      for (const c of linkPlan.create) this.items.push(this._makeConnector(c.fromId, c.toId));
     }
 
     this.drawInk();
@@ -1415,7 +1492,7 @@ export class Board {
     this.arrangeMenu.appendChild(ce('div', 'bp-menu-hint', '选中 2 个以上只排选中的，否则排全部'));
     const menuGroups = [
       ['对齐', [['alignLeft', '左对齐'], ['alignTop', '顶部对齐']]],
-      ['排布', [['vertical', '竖向排列'], ['horizontal', '横向排列'], ['grid', '网格排列'], ['twoCols', '两列排列'], ['mindmap', '思维导图']]],
+      ['排布', [['vertical', '竖向排列'], ['horizontal', '横向排列'], ['grid', '网格排列'], ['twoCols', '两列排列'], ['mindmap', '思维导图'], ['mindmapLinks', '思维导图（带连线）']]],
     ];
     for (const [title, entries] of menuGroups) {
       this.arrangeMenu.appendChild(ce('div', 'bp-menu-group', title));
@@ -1760,7 +1837,7 @@ export class Board {
   }
 
   _drawStrokeCtx(ctx, st) {
-    const pts = st.points;
+    const pts = this._strokePoints(st);
     if (!pts || !pts.length) return;
     const w = Math.max(0.5, finite(st.width, 2.6));
     ctx.save();
@@ -1812,9 +1889,99 @@ export class Board {
     });
   }
 
+  /* ---------------------- 思维导图连线（connector） ---------------------- */
+
+  /** 连线端点：从元素中心沿目标方向走到矩形边框，再外扩 CONNECTOR_MARGIN */
+  _connectorGeom(it) {
+    if (!it || it.kind !== 'connector') return null;
+    const a = this.get(it.fromId);
+    const b = this.get(it.toId);
+    if (!a || !b || a.type === 'stroke' || b.type === 'stroke') return null;
+    const ba = this._itemBBox(a);
+    const bb = this._itemBBox(b);
+    const ca = { x: ba.x + ba.w / 2, y: ba.y + ba.h / 2 };
+    const cb = { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 };
+    const dx = cb.x - ca.x;
+    const dy = cb.y - ca.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return null;
+    const ux = dx / len;
+    const uy = dy / len;
+    // 中心 → 矩形边框的射线距离（沿 ±u 方向）
+    const edgeDist = (hw, hh) => {
+      const ex = Math.abs(ux) < 1e-6 ? Infinity : hw / Math.abs(ux);
+      const ey = Math.abs(uy) < 1e-6 ? Infinity : hh / Math.abs(uy);
+      return Math.min(ex, ey);
+    };
+    const ta = edgeDist(ba.w / 2, ba.h / 2) + CONNECTOR_MARGIN;
+    const tb = edgeDist(bb.w / 2, bb.h / 2) + CONNECTOR_MARGIN;
+    const start = { x: ca.x + ux * ta, y: ca.y + uy * ta };
+    const end = { x: cb.x - ux * tb, y: cb.y - uy * tb };
+    const span = Math.hypot(end.x - start.x, end.y - start.y);
+    if (span < 2) return null;
+    // 二次贝塞尔：控制点在中点沿法线偏移一点点，形成柔和弧线
+    const nx = -uy;
+    const ny = ux;
+    const bend = Math.min(52, span * 0.12);
+    const cx = (start.x + end.x) / 2 + nx * bend;
+    const cy = (start.y + end.y) / 2 + ny * bend;
+    const steps = Math.round(clamp(span / 10, 8, 48));
+    const points = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const mt = 1 - t;
+      points.push({
+        x: mt * mt * start.x + 2 * mt * t * cx + t * t * end.x,
+        y: mt * mt * start.y + 2 * mt * t * cy + t * t * end.y,
+      });
+    }
+    return { points, bbox: strokeBBox(points, finite(it.width, CONNECTOR_WIDTH)) };
+  }
+
+  /** 笔画/连线的点集（连线现算） */
+  _strokePoints(it) {
+    if (!it) return [];
+    if (it.kind === 'connector') {
+      const g = this._connectorGeom(it);
+      return g ? g.points : [];
+    }
+    return it.points || [];
+  }
+
+  /** 新建一条连线（z 放到所有笔画之下、元素之上） */
+  _makeConnector(fromId, toId) {
+    return {
+      id: uid(),
+      type: 'stroke',
+      kind: 'connector',
+      z: this._minZ() - 1,
+      fromId,
+      toId,
+      color: CONNECTOR_COLOR,
+      width: CONNECTOR_WIDTH,
+      opacity: 1,
+      tool: 'connector',
+    };
+  }
+
+  /** 清理端点已不存在的连线（悬空自愈） */
+  _pruneConnectors() {
+    const elems = new Set(this.items.filter((it) => it.type !== 'stroke').map((it) => it.id));
+    const before = this.items.length;
+    this.items = this.items.filter((it) => it.kind !== 'connector'
+      || (elems.has(it.fromId) && elems.has(it.toId) && it.fromId !== it.toId));
+    return this.items.length !== before;
+  }
+
   _itemBBox(it) {
     if (!it) return { x: 0, y: 0, w: 0, h: 0 };
-    if (it.type === 'stroke') return it.bbox || strokeBBox(it.points, it.width);
+    if (it.type === 'stroke') {
+      if (it.kind === 'connector') {
+        const g = this._connectorGeom(it);
+        return g ? g.bbox : { x: 0, y: 0, w: 0, h: 0 };
+      }
+      return it.bbox || strokeBBox(it.points, it.width);
+    }
     if (it.type === 'text') {
       // 文字高度：模型 h（已按真实排版测量）与 DOM 实测取较大者，
       // 这样命中测试 / 框选 / 导出包围盒都不会因为多行文字而偏小。
@@ -1857,6 +2024,8 @@ export class Board {
 
   _renderAll() {
     if (this._destroyed || !this.itemsEl) return;
+    // 防御性清理端点已不存在的连线（悬空自愈）
+    this._pruneConnectors();
     const frag = document.createDocumentFragment();
     this._els = new Map();
     for (const it of this._sortedItems()) {
@@ -2031,7 +2200,9 @@ export class Board {
   }
 
   selectAll() {
-    this.setSelection(this.items.map((it) => it.id));
+    // 与框选保持一致：思维导图连线（connector）不参与批量选中，
+    // 否则 Ctrl+A 之后改颜色/删除会连带处理这些结构性的灰色连线。
+    this.setSelection(this.items.filter((it) => it.kind !== 'connector').map((it) => it.id));
   }
 
   _setMarquee(left, top, width, height) {
@@ -2052,21 +2223,27 @@ export class Board {
   }
 
   hitTest(wx, wy) {
-    // 视觉上「元素永远在笔画之上」，所以先按 z 从高到低找图片/文字，再找笔画
+    // 命中优先级：元素（图片/文字）> 普通笔画 > 思维导图连线
     const elems = [];
     const strokes = [];
+    const links = [];
     for (const it of this.items) {
-      if (it.type === 'stroke') strokes.push(it);
-      else elems.push(it);
+      if (it.type !== 'stroke') elems.push(it);
+      else if (it.kind === 'connector') links.push(it);
+      else strokes.push(it);
     }
     const byZ = (a, b) => finite(b.z, 0) - finite(a.z, 0);
     elems.sort(byZ);
     for (const it of elems) {
       if (pointInRect(wx, wy, this._itemBBox(it))) return it;
     }
-    strokes.sort(byZ);
     const extra = 2 / this._view.scale;
+    strokes.sort(byZ);
     for (const it of strokes) {
+      if (this._hitStroke(it, wx, wy, extra)) return it;
+    }
+    links.sort(byZ);
+    for (const it of links) {
       if (this._hitStroke(it, wx, wy, extra)) return it;
     }
     return null;
@@ -2097,7 +2274,7 @@ export class Board {
   }
 
   _hitStroke(it, wx, wy, extra = 0) {
-    const pts = it.points;
+    const pts = this._strokePoints(it);
     if (!pts || !pts.length) return false;
     const tol = Math.max(1, finite(it.width, 2) / 2) + extra;
     if (pts.length === 1) return Math.hypot(wx - pts[0].x, wy - pts[0].y) <= tol;
@@ -2148,7 +2325,7 @@ export class Board {
     }
 
     // 非选择工具按到已有元素：只提示一次（空白处按下不提示，仍按原工具工作）
-    if (hit) this._hintToolOnElement();
+    if (hit && hit.type !== 'stroke') this._hintToolOnElement();
 
     if (this.tool === 'pen' || this.tool === 'highlighter') {
       this._startStroke(e, wp);
@@ -2244,14 +2421,16 @@ export class Board {
     if (!selectedItems.length) return;
     const selectedIds = new Set(selectedItems.map((it) => it.id));
 
-    // 需要移动的：选中的元素 + 它们的子笔画（子笔画自己也被选中时不重复）
-    const items = selectedItems.slice();
+    // 需要移动的：选中的元素 + 它们的子笔画（子笔画自己也被选中时不重复）。
+    // 思维导图连线不参与移动（端点随元素重算，拖动连线直接忽略）。
+    const items = selectedItems.filter((it) => it.kind !== 'connector');
     for (const parent of selectedItems) {
       if (parent.type === 'stroke') continue;
       for (const it of this.items) {
         if (it.type === 'stroke' && it.parentId === parent.id && !selectedIds.has(it.id)) items.push(it);
       }
     }
+    if (!items.length) return;
 
     const starts = items.map((it) => (it.type === 'stroke'
       ? { points: it.points.map((p) => ({ x: p.x, y: p.y })), bbox: { ...it.bbox } }
@@ -2320,6 +2499,7 @@ export class Board {
         this._setMarquee(rect.x * s + this._view.x, rect.y * s + this._view.y, rect.w * s, rect.h * s);
         const next = new Set(base);
         for (const it of this.items) {
+          if (it.kind === 'connector') continue;    // 连线不参与框选（斜线 bbox 太大易误选）
           if (!rectsIntersect(rect, this._itemBBox(it))) continue;
           next.add(it.id);
         }
@@ -3575,13 +3755,14 @@ export class Board {
     if (!this.selected.size) return;
     if (this.editingId) this.commitEdit();
     this._record('delete');
-    // 删父元素时把归属它的笔画一起删掉（一次撤销可还原）
+    // 删父元素时把归属它的笔画 / 两端相关的连线一起删掉（一次撤销可还原）
     const ids = new Set(this.selected);
     for (const id of this.selected) {
       const it = this.get(id);
       if (!it || it.type === 'stroke') continue;
       for (const c of this.items) {
         if (c.type === 'stroke' && c.parentId === id) ids.add(c.id);
+        if (c.kind === 'connector' && (c.fromId === id || c.toId === id)) ids.add(c.id);
       }
     }
     this.items = this.items.filter((it) => !ids.has(it.id));
@@ -3593,14 +3774,14 @@ export class Board {
   duplicateSelection() {
     const sel = [...this.selected];
     if (!sel.length) return;
-    this._record('duplicate');
-    const maxZ = this._maxZ();
 
     // 参与复制的：选中的元素 + 归属它们的子笔画（子笔画自己也被选中时不重复）
     const ids = [];
     const seen = new Set();
     const add = (id) => { if (!seen.has(id)) { seen.add(id); ids.push(id); } };
     for (const id of sel) {
+      const selIt = this.get(id);
+      if (selIt && selIt.kind === 'connector') continue;   // 连线不单独复制，随两端元素走
       add(id);
       const it = this.get(id);
       if (!it || it.type === 'stroke') continue;
@@ -3608,6 +3789,10 @@ export class Board {
         if (c.type === 'stroke' && c.parentId === id) add(c.id);
       }
     }
+    if (!ids.length) return;      // 只选了连线：没有可复制的东西
+
+    this._record('duplicate');
+    const maxZ = this._maxZ();
 
     const idMap = new Map(ids.map((id) => [id, uid()]));
     const newIds = [];
@@ -3629,6 +3814,13 @@ export class Board {
       this.items.push(c);
       newIds.push(c.id);
     });
+    // 连线：只有两端都被一起复制时，才为新副本建线（端点映射到新 id）
+    const linkCopies = [];
+    for (const it of this.items) {
+      if (it.kind !== 'connector') continue;
+      if (idMap.has(it.fromId) && idMap.has(it.toId)) linkCopies.push([idMap.get(it.fromId), idMap.get(it.toId)]);
+    }
+    for (const [fromId, toId] of linkCopies) this.items.push(this._makeConnector(fromId, toId));
     this._renderAll();
     this.setSelection(newIds);
     this.scheduleSave();
@@ -3636,10 +3828,13 @@ export class Board {
 
   _nudge(dx, dy) {
     if (!this.selected.size) return;
-    this._record('nudge', 700);
-    // 选中的元素 + 它们的子笔画一起挪（子笔画自己也被选中时不重复）
+    // 选中的元素 + 它们的子笔画一起挪（子笔画自己也被选中时不重复；连线不直接挪）
     const ids = new Set(this.selected);
-    const moving = [...this.selected].map((id) => this.get(id)).filter(Boolean);
+    const moving = [...this.selected]
+      .map((id) => this.get(id))
+      .filter((it) => it && it.kind !== 'connector');
+    if (!moving.length) return;
+    this._record('nudge', 700);
     for (const it of moving) {
       if (it.type === 'stroke') continue;
       for (const c of this.items) {
