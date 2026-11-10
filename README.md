@@ -7,16 +7,13 @@
 
 点上面的按钮就能一键部署到你自己的 Vercel（纯静态、无需构建、免费额度够用），部署完直接用，没有账号也不需要数据库。
 
-**在线试用（本项目自己的静态部署）**：<https://pretenderlu.github.io/pdf-board/>
-这条是在 GitHub Pages 上跑的纯静态版，打开就能用——数据只留在你自己的浏览器里，不会上传。
-
 > 手头没有合适的 PDF 想先试试？仓库里放了一份纯占位文字的示例： [`docs/demo.pdf`](docs/demo.pdf)（内容只有"测试一二三四"这类假数据）。
 
 ![整理效果](docs/screenshot.jpg)
 
 - 纯前端实现，无框架、无构建、**零运行时依赖**（pdf.js 已内置在 `vendor/`）
 - PDF 只在你自己的浏览器里解析，**不会上传到任何服务器**
-- 可以纯静态部署（Vercel / GitHub Pages / 任意静态托管），也可以自托管让白板存服务器、多设备共享
+- 可以纯静态部署（Vercel 或任意静态托管），也可以自托管让白板存服务器、多设备共享
 
 ---
 
@@ -94,7 +91,7 @@ vercel --prod
 
 或者：把仓库推到 GitHub → Vercel 里 Import → Framework 选 **Other**、Build Command 留空、Output Directory 用默认即可。
 
-也可以零配置放到 **GitHub Pages**（本项目的在线试用就是这么跑的）：仓库 Settings → Pages → Source 选 `main` / `/(root)` 即可，仓库里已有 `.nojekyll`，会原样发布静态文件。
+也可以零配置放到任意静态托管（GitHub Pages / Cloudflare Pages / Nginx …）：把仓库里的 `index.html`、`css/`、`js/`、`vendor/` 一起发出去就行，没有任何构建步骤。
 
 `.vercelignore` 会把 `server.mjs`、`Dockerfile`、`data/` 等自托管才需要的东西排除掉，上传的就是纯静态资源（约 5MB，其中 4.6MB 是内置的 pdf.js 与中文字体）。
 
