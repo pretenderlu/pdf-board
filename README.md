@@ -10,6 +10,8 @@
 **在线试用（本项目自己的静态部署）**：<https://pretenderlu.github.io/pdf-board/>
 这条是在 GitHub Pages 上跑的纯静态版，打开就能用——数据只留在你自己的浏览器里，不会上传。
 
+> 手头没有合适的 PDF 想先试试？仓库里放了一份纯占位文字的示例： [`docs/demo.pdf`](docs/demo.pdf)（内容只有"测试一二三四"这类假数据）。
+
 ![整理效果](docs/screenshot.jpg)
 
 - 纯前端实现，无框架、无构建、**零运行时依赖**（pdf.js 已内置在 `vendor/`）
@@ -147,7 +149,8 @@ pdf-board/
   启动 PDF 摘录白板.cmd   Windows 双击启动
   创建桌面快捷方式.cmd   Windows 桌面图标
   data/boards/          自托管时的白板数据（运行时生成，备份就拷这里）
-  docs/screenshot.jpg  使用示意
+  docs/screenshot.jpg  使用示意（用 docs/demo.pdf 录的，内容全是占位文字）
+  docs/demo.pdf        示例 PDF（3 页，纯假数据，可拿来直接试框选）
   docs/部署到服务器.md    Docker / HTTPS / 备份
   docs/接口契约.md       模块接口说明（想改代码时看）
   vendor/pdfjs/         pdf.js 4.10.38（含 cmaps、standard_fonts，离线可用）
