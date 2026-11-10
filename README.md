@@ -3,18 +3,11 @@
 **左边读 PDF、右边当白板**：把试卷/资料里的题目**框一下、贴过去**，在白板上拼版、批注，再导出 PNG / PDF。
 适合整理错题、拼卷子、把扫描件里的某道题抠出来重新排版。
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fpretenderlu%2Fpdf-board&project-name=pdf-board)
-
-上面这个按钮是 Vercel 的**模板部署**入口：点它会把本仓库**复制一份**到你自己的 GitHub 账号，再在你的 Vercel 里建项目。所以——
-
-- 想把这个项目当模板用（在自己账号里留一份独立副本再改）：点按钮。
-- **只是想部署自己这一份**（例如你就是本仓库的 owner）：**不要点按钮**，去 Vercel 控制台 `Add New… → Project → Import` 选这个仓库即可，不会产生任何副本。详见下文《部署到 Vercel》。
-
 ![整理效果](docs/screenshot.jpg)
 
 - 纯前端实现，无框架、无构建、**零运行时依赖**（pdf.js 已内置在 `vendor/`）
 - PDF 只在你自己的浏览器里解析，**不会上传到任何服务器**
-- 可以纯静态部署（Vercel 或任意静态托管），也可以自托管让白板存服务器、多设备共享
+- 可以纯静态部署（步骤见下文《部署到静态托管》），也可以自托管让白板存服务器、多设备共享
 
 > 手头没有合适的 PDF 想先试试？仓库里放了一份纯占位文字的示例： [`docs/demo.pdf`](docs/demo.pdf)（内容只有"测试一二三四"这类假数据）。
 
@@ -24,7 +17,7 @@
 
 | | 在线版（纯静态） | 自托管（Node / Docker） |
 |---|---|---|
-| 部署 | Vercel / 静态托管，一条命令 | `node server.mjs` 或 `docker compose up -d` |
+| 部署 | 部署到 Vercel / 任意静态托管（见下文步骤） | `node server.mjs` 或 `docker compose up -d` |
 | 白板存哪 | 各人自己的浏览器（IndexedDB） | 服务器上的 `data/boards/*.json` |
 | 多设备同步 | ✗（换设备是空的） | ✓（连同一地址就是同一套板） |
 | 多块白板 / 重命名 | ✗（只有一块，刷新还在） | ✓（顶栏切换 / 新建 / 重命名 / 删除） |
@@ -83,16 +76,42 @@ python -m http.server 7420     # 然后开 http://127.0.0.1:7420/
 
 ---
 
-## 部署到 Vercel（纯静态，无后端）
+## 部署到静态托管（以 Vercel 为例）
 
-项目根目录已经有 `vercel.json`，**不需要构建命令、不需要环境变量**。三种方式选一种：
+本项目是**纯静态**的：没有构建命令、不用装依赖、没有服务端、不需要任何环境变量。
+发布方式就是**把仓库根目录当静态目录发出去**，需要一起发的是这四样：
 
-**A. 部署自己这一份（推荐，不产生任何副本）**
+```
+index.html
+css/
+js/
+vendor/          # 4.6MB，pdf.js 与中文字体，必须一起发
+```
 
-Vercel 控制台 → **Add New… → Project** → 在 Git 仓库列表里选中这个仓库 → Framework Preset 选 **Other**、Build Command **留空** → Deploy。
-（第一次用需要在 Vercel 里授权 GitHub，授权后该仓库才会出现在列表里。）
+### 方式一：Vercel 控制台导入（推荐）
 
-**B. 命令行（同样不产生副本）**
+1. 确认你要部署的仓库已经在你自己的 GitHub 账号里（本仓库可直接用，也可以 fork 一份再改）
+2. 打开 <https://vercel.com/new>，在 Git 仓库列表里选中它 → **Import**
+3. 参数这样填，其余保持默认：
+
+   | 选项 | 填什么 |
+   |---|---|
+   | Framework Preset | **Other** |
+   | Build Command | **留空**（勾掉 Override 即可） |
+   | Output Directory | **留空**（默认仓库根目录） |
+   | Install Command | **留空** |
+   | Environment Variables | **不需要** |
+
+4. 点 **Deploy**，十几秒完成，拿到 `https://<项目名>.vercel.app`
+
+之后每一次往该仓库的默认分支 push，Vercel 都会自动重新部署。
+
+仓库里已经备好的两个文件：
+
+- `vercel.json`：声明无构建、静态资源缓存头与安全头
+- `.vercelignore`：把 `server.mjs`、`Dockerfile`、`compose`、`data/` 这些**自托管才需要**的东西排除出发布内容，实际发布约 5MB 静态资源
+
+### 方式二：命令行部署
 
 在本地这个仓库的目录里执行：
 
@@ -101,18 +120,12 @@ npm i -g vercel
 vercel --prod
 ```
 
-首次会问是否 link 到某个 Vercel 项目，选新建即可。它部署的是**你当前目录里的代码**，不会复制仓库。
+首次会问要不要 link 到某个 Vercel 项目，选新建即可；它部署的是**当前目录里的代码**，不会复制仓库。之后同一个目录再执行 `vercel --prod` 就更新同一个项目。
 
-**C. 模板按钮（会复制仓库到你的账号）**
+### 方式三：其他静态托管
 
-README 顶部的 `Deploy with Vercel` 按钮走的是 Vercel 的 **clone** 流程：先在点按钮的人自己的账号下**新建一份仓库副本**，再部署那份副本。
-
-- 适合"我想基于这个项目改一版、要一份独立仓库"的场景
-- 仓库主人点它就会看到"要你 fork 自己的项目"——**这不是 bug，而是这个入口的固定机制**；只想部署自己这份请用 A 或 B
-
-也可以零配置放到任意静态托管（Cloudflare Pages / Nginx / GitHub Pages …）：把仓库里的 `index.html`、`css/`、`js/`、`vendor/` 一起发出去就行，没有任何构建步骤。
-
-`.vercelignore` 会把 `server.mjs`、`Dockerfile`、`data/` 等自托管才需要的东西排除掉，上传的就是纯静态资源（约 5MB，其中 4.6MB 是内置的 pdf.js 与中文字体）。
+Cloudflare Pages / Netlify / Nginx / GitHub Pages 都一样：**根目录当静态目录、不执行构建**。
+放在子路径（如 `https://example.com/pdf-board/`）也能正常工作，页面里的资源都是相对路径。
 
 静态版的行为：
 
@@ -120,6 +133,7 @@ README 顶部的 `Deploy with Vercel` 按钮走的是 Vercel 的 **clone** 流�
 - 想清空：点白板工具条的垃圾桶（点两次），或清该站点的浏览器数据
 - 因为是 HTTPS，**框选后可以直接把截图写进系统剪贴板**贴到 Word/微信（`http://` 下浏览器会禁用该功能）
 - 换设备/换浏览器打开是空白板——本来就没打算存服务端
+- 如果你需要"多设备同一套白板"，用下面的自托管方式
 
 ---
 
