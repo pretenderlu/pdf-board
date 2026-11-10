@@ -646,6 +646,12 @@ function closeExportMenu() {
 }
 function openExportMenu() {
   if (!exportMenu) return;
+  // A4 页面模式下导出语义不同：PNG 只导当前页，PDF 按纸张逐页输出
+  const pg = isPageMode();
+  const pngBtn = $('btnExportPng');
+  const pdfBtn = $('btnExportPdf');
+  if (pngBtn) pngBtn.textContent = pg ? '导出为 PNG（当前 A4 页）' : '导出为 PNG 图片';
+  if (pdfBtn) pdfBtn.textContent = pg ? '导出为 PDF（按 A4 页输出）' : '导出为 PDF（A4 分页）';
   exportMenu.hidden = false;
   btnExport?.setAttribute('aria-expanded', 'true');
 }
@@ -661,12 +667,62 @@ if (btnExport && exportMenu) {
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeExportMenu(); });
 }
 
+/* ---- A4 页面模式：按页导出辅助 ---- */
+function isPageMode() {
+  return !!(board && typeof board.getPageMode === 'function' && board.getPageMode() === 'a4');
+}
+function pageRectsSafe() {
+  try {
+    const r = board && typeof board.pageRects === 'function' ? board.pageRects() : null;
+    return Array.isArray(r) && r.length ? r : null;
+  } catch { return null; }
+}
+function currentPageIndex(rectCount) {
+  const d = board && typeof board.toJSON === 'function' ? board.toJSON() : null;
+  const i = Math.floor(Number(d && d.curPage));
+  const n = rectCount || 1;
+  return Math.min(Math.max(Number.isFinite(i) ? i : 0, 0), n - 1);
+}
+
+async function exportPagePNG() {
+  const rects = pageRectsSafe();
+  if (!rects) return false;
+  const idx = currentPageIndex(rects.length);
+  const src = await board.renderToCanvas({ rect: rects[idx], scale: 2, background: '#ffffff' });
+  if (!src || !src.width) { toast('渲染当前页失败'); return false; }
+  const blob = await new Promise((resolve) => src.toBlob(resolve, 'image/png'));
+  if (!blob) { toast('PNG 编码失败'); return false; }
+  downloadBlob(blob, `白板-第${idx + 1}页-${stamp()}.png`);
+  toast(`已导出第 ${idx + 1} 页（A4，${src.width}×${src.height}）`, 2600);
+  return true;
+}
+
+async function exportPagesPDF() {
+  const rects = pageRectsSafe();
+  if (!rects) return false;
+  const pageW = A4_PORTRAIT.w;
+  const pageH = A4_PORTRAIT.h;
+  const pages = [];
+  for (const r of rects) {
+    const c = await board.renderToCanvas({ rect: r, scale: 2, background: '#ffffff' });
+    if (!c || !c.width) continue;
+    const jpeg = await canvasToJpegBytes(c, 0.92);
+    // A4 页与 PDF 页面同比例（794:1123 ≈ 595.28:841.89），整页铺满，所见即所得
+    pages.push({ jpeg, pxW: c.width, pxH: c.height, drawW: pageW, drawH: pageH, drawX: 0, drawY: 0 });
+  }
+  if (!pages.length) { toast('没有可导出的页面'); return false; }
+  const bytes = buildPdf({ pages, pageW, pageH });
+  downloadBlob(new Blob([bytes], { type: 'application/pdf' }), `白板-${stamp()}.pdf`);
+  toast(`已导出 PDF（${pages.length} 页 A4，按页面排版 1:1 输出）`, 3000);
+  return true;
+}
+
 $('btnExportPng').addEventListener('click', async () => {
   closeExportMenu();
   if (!board) return;
   try {
-    const ok = await board.exportPNG();
-    if (ok !== false) toast('已导出 PNG');
+    const ok = isPageMode() ? await exportPagePNG() : await board.exportPNG();
+    if (ok !== false && !isPageMode()) toast('已导出 PNG');
   } catch (err) {
     console.error(err);
     toast('导出失败：' + (err?.message || err));
@@ -800,6 +856,12 @@ async function exportPDF() {
   if (typeof board.renderToCanvas !== 'function') {
     toast('白板模块版本较旧，暂不支持 PDF 导出');
     return false;
+  }
+  // A4 页面模式：一张纸 = 一页 PDF，1:1 输出，不再自动切页
+  if (isPageMode()) {
+    if (!pageRectsSafe()) { toast('页面信息不可用'); return false; }
+    toast('正在生成 PDF…', 1200);
+    return exportPagesPDF();
   }
   if (!(board.toJSON().items || []).length) { toast('白板还是空的，先贴点内容'); return false; }
   toast('正在生成 PDF…', 1200);

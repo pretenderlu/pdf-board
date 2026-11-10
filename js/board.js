@@ -36,6 +36,11 @@ const ARRANGE_ROW_TOL = 14;          // 阅读顺序判定「同一行」的 y �
 const CONNECTOR_COLOR = '#9aa4b2';   // 灰色细曲线
 const CONNECTOR_WIDTH = 2;
 const CONNECTOR_MARGIN = 6;          // 端点裁到元素边框外 6px
+// A4 页面模式：纸张只是画在无限画布上的参考格（世界坐标不变）
+const A4_PAGE_W = 794;               // 96dpi 下 A4 = 210×297mm
+const A4_PAGE_H = 1123;
+const A4_PAGE_GAP = 48;              // 页间距（世界像素）
+const MAX_PAGES = 20;                // 最多 20 页
 const TEXT_COLOR = '#1f2329';
 const MAX_TEXT_WIDTH = 460;          // 文字元素自动排版的最大宽度（世界坐标）
 const MIN_TEXT_WIDTH = 40;
@@ -308,7 +313,11 @@ export function sanitizeData(raw) {
     if (it.kind !== 'connector') continue;
     if (!elemIds.has(it.fromId) || !elemIds.has(it.toId)) items.splice(i, 1);
   }
-  return { version: 1, view, items };
+  // A4 页面模式（旧数据缺字段 → infinite / 1 页 / 第 0 页）
+  const pageMode = src.pageMode === 'a4' ? 'a4' : 'infinite';
+  const pageCount = clamp(Math.round(finite(src.pageCount, 1)), 1, MAX_PAGES);
+  const curPage = clamp(Math.round(finite(src.curPage, 0)), 0, pageCount - 1);
+  return { version: 1, view, items, pageMode, pageCount, curPage };
 }
 
 /* ======================= 小工具 ======================= */
@@ -524,6 +533,12 @@ export class Board {
     this._hlColor = DEFAULT_HL_COLOR;
     this._loadColorPrefs();
 
+    // A4 页面模式（纸张只是参考格，元素始终在世界坐标里，切换不移动）
+    this._pageMode = 'infinite';
+    this._pageCount = 1;
+    this._curPage = 0;                 // 0-based，范围 0..pageCount-1
+    this._pageWrapToastAt = 0;         // 「页底回卷」提示节流
+
     // 编辑态
     this._editEl = null;
     this._editSnap = null;
@@ -698,6 +713,8 @@ export class Board {
    * 3. 全部失败 → 兜底：中央 + (pasteSeq % 8) * 18 的阶梯错位（保证不完全重叠）。
    */
   _placeFor(w, h) {
+    // A4 模式：落位限制在当前页内（列式下落，触底回卷页顶）
+    if (this._pageMode === 'a4') return this._placeForInPage(w, h);
     const center = this._centerPlacement(w, h);
     if (!this._overlapsTooMuch(center, w, h)) return center;
 
@@ -824,13 +841,26 @@ export class Board {
    */
   async renderToCanvas(opts = {}) {
     if (this._destroyed) return null;
-    if (!this.items.length) return null;
     if (this.editingId) this.commitEdit();
 
-    const box = this.contentBBox();
-    if (!box) return null;
+    // 传 rect → 按世界矩形裁剪渲染（一页 A4 一张图）；不传 → 保持原行为（内容 bbox + 留白）
+    const rect = opts.rect && typeof opts.rect === 'object' ? opts.rect : null;
+    let box;
+    let PAD;
+    if (rect) {
+      const rx = finite(rect.x, 0);
+      const ry = finite(rect.y, 0);
+      const rw = Math.max(1, finite(rect.w, 1));
+      const rh = Math.max(1, finite(rect.h, 1));
+      box = { x: rx, y: ry, w: rw, h: rh };
+      PAD = clamp(finite(opts.padding, 0), 0, 4000);
+    } else {
+      if (!this.items.length) return null;
+      box = this.contentBBox();
+      if (!box) return null;
+      PAD = clamp(finite(opts.padding, 60), 0, 4000);
+    }
 
-    const PAD = clamp(finite(opts.padding, 60), 0, 4000);
     const wantScale = clamp(finite(opts.scale, 2), 0.2, 8);
     const bg = typeof opts.background === 'string' ? opts.background : '#ffffff';
     const wWorld = box.w + PAD * 2;
@@ -959,6 +989,9 @@ export class Board {
     return {
       version: 1,
       view: { x: this._view.x, y: this._view.y, scale: this._view.scale },
+      pageMode: this._pageMode,
+      pageCount: this._pageCount,
+      curPage: this._curPage,
       items: this.items.map(cloneItem),
     };
   }
@@ -1000,6 +1033,7 @@ export class Board {
     try {
       this._renderAll();
       this._applyView();
+      this._syncPageUI();
       if (!silent) this.scheduleSave();
     } finally {
       this._suppressChange = false;
@@ -1021,6 +1055,141 @@ export class Board {
     this._fitRect(box, 60, 2);
     this._applyView();
     this.scheduleSave();
+  }
+
+  /* ---------------------- A4 页面模式 ---------------------- */
+
+  getPageMode() {
+    return this._pageMode;
+  }
+
+  /** 各页的世界矩形（多页纵向排列；与是否处于 A4 模式无关，供导出用） */
+  pageRects() {
+    const n = clamp(Math.round(finite(this._pageCount, 1)), 1, MAX_PAGES);
+    const rects = [];
+    for (let i = 0; i < n; i++) {
+      rects.push({ x: 0, y: i * (A4_PAGE_H + A4_PAGE_GAP), w: A4_PAGE_W, h: A4_PAGE_H });
+    }
+    return rects;
+  }
+
+  _syncPageUI() {
+    const a4 = this._pageMode === 'a4';
+    if (this.modeBtns) {
+      for (const [mode, btn] of this.modeBtns) btn.classList.toggle('bp-on', mode === this._pageMode);
+    }
+    if (this.pageBar) this.pageBar.hidden = !a4;
+    if (this.pageLabelEl) this.pageLabelEl.textContent = `第 ${this._curPage + 1} / ${this._pageCount} 页`;
+    if (this.pagePrevBtn) this.pagePrevBtn.disabled = this._curPage <= 0;
+    if (this.pageNextBtn) this.pageNextBtn.disabled = this._curPage >= this._pageCount - 1;
+    if (this.pageDelBtn) this.pageDelBtn.disabled = this._pageCount <= 1;
+  }
+
+  /** 页面数量/当前页变化后：重画纸张、把当前页拉进视野、存盘 */
+  /** 把当前页居中到视野（不改缩放） */
+  _centerPageInView() {
+    const page = this.pageRects()[this._curPage];
+    if (!page || this.w <= 0 || this.h <= 0) return;
+    const s = this._view.scale;
+    this._view.x = Math.round(this.w / 2 - (page.x + page.w / 2) * s);
+    this._view.y = Math.round(this.h / 2 - (page.y + page.h / 2) * s);
+    this._viewTouched = true;
+    this._applyView();
+  }
+
+  _afterPageChange() {
+    this._syncPageUI();
+    this._centerPageInView();
+    this.scheduleSave();
+  }
+
+  setPageMode(mode) {
+    const next = mode === 'a4' ? 'a4' : 'infinite';
+    if (next === this._pageMode) return false;
+    this._pageMode = next;
+    this._syncPageUI();
+    this._drawGrid();
+    if (next === 'a4') {
+      // 切到 A4：先适应内容，再把当前页居中到视野
+      this.fitContent();
+      this._centerPageInView();
+    }
+    this.scheduleSave();
+    return true;
+  }
+
+  setPageCount(n) {
+    const next = clamp(Math.round(finite(n, 1)), 1, MAX_PAGES);
+    if (next === this._pageCount) return false;
+    this._pageCount = next;
+    this._curPage = clamp(this._curPage, 0, next - 1);
+    this._afterPageChange();
+    return true;
+  }
+
+  setCurPage(i, opts = {}) {
+    const next = clamp(Math.round(finite(i, 0)), 0, this._pageCount - 1);
+    if (next === this._curPage) return false;
+    this._curPage = next;
+    this._syncPageUI();
+    // 点页面空白处切换时不要平移视图（避免打断正在开始的框选）
+    if (opts.reveal !== false) this._centerPageInView();
+    else this._drawGrid();
+    this.scheduleSave();
+    return true;
+  }
+
+  /** 末尾添加一页并跳过去 */
+  addPage() {
+    if (this._pageCount >= MAX_PAGES) { this._toast(`最多 ${MAX_PAGES} 页`, 2400); return false; }
+    this._pageCount += 1;
+    this._curPage = this._pageCount - 1;
+    this._afterPageChange();
+    return true;
+  }
+
+  /** 删除当前页的纸张（元素不删除、不移动；至少保留 1 页） */
+  removePage() {
+    if (this._pageCount <= 1) { this._toast('至少保留 1 页', 2400); return false; }
+    this._pageCount -= 1;
+    this._curPage = clamp(this._curPage, 0, this._pageCount - 1);
+    this._afterPageChange();
+    this._toast('已删除纸张（页面上的内容不会被删除）', 2400);
+    return true;
+  }
+
+  /** A4 模式下的落位：限制在当前页内，列式下落，触底回卷到页顶 */
+  _placeForInPage(w, h) {
+    const page = this.pageRects()[this._curPage] || { x: 0, y: 0, w: A4_PAGE_W, h: A4_PAGE_H };
+    const margin = 24;
+    const x = w <= page.w - margin * 2
+      ? clamp(page.x + margin, page.x, page.x + page.w - w)
+      : page.x;
+    // 当前页里已有元素的最下沿
+    let bottom = page.y + margin;
+    for (const it of this.items) {
+      const b = this._itemBBox(it);
+      if (b.x >= page.x + page.w || b.x + b.w <= page.x) continue;
+      if (b.y >= page.y + page.h || b.y + b.h <= page.y) continue;
+      bottom = Math.max(bottom, b.y + b.h + margin);
+    }
+    let y = bottom;
+    let wrapped = false;
+    if (y + h > page.y + page.h) { y = page.y + margin; wrapped = true; }
+    // 回卷后若压住已有元素，继续向下找空位（最多 12 次，再不行就允许重叠）
+    for (let i = 0; i < 12; i++) {
+      if (!this._overlapsTooMuch({ x, y }, w, h)) break;
+      y += h + margin;
+      if (y + h > page.y + page.h) { y = page.y + margin; break; }
+    }
+    if (wrapped) {
+      const now = Date.now();
+      if (!this._pageWrapToastAt || now - this._pageWrapToastAt > 1500) {
+        this._pageWrapToastAt = now;
+        this._toast('当前页放不下，已从页顶开始', 2400);
+      }
+    }
+    return { x: Math.round(x), y: Math.round(y) };
   }
 
   /* ---------------------- 一键排列 / 对齐 ---------------------- */
@@ -1525,13 +1694,57 @@ export class Board {
       this.savedEl.title = '保存状态由外部控制';
     }
 
+    // 模式切换：无限画布 | A4 页面
+    const modeSeg = ce('div', 'bp-seg');
+    modeSeg.setAttribute('role', 'group');
+    modeSeg.setAttribute('aria-label', '画布模式');
+    this.modeBtns = new Map();
+    for (const [mode, label] of [['infinite', '无限画布'], ['a4', 'A4 页面']]) {
+      const b = ce('button', 'btn bp-seg-btn', label);
+      b.type = 'button';
+      b.dataset.mode = mode;
+      b.addEventListener('click', () => this.setPageMode(mode));
+      modeSeg.appendChild(b);
+      this.modeBtns.set(mode, b);
+    }
+    bar.appendChild(modeSeg);
+
     bar.append(zOut, this.zoomEl, zIn, fitBtn, this.arrangeBtn, this.clearBtn, this.savedEl);
     this.toolbar = bar;
     this.root.appendChild(bar);
     this._syncArrangeBtn();
 
+    // A4 模式浮动页面条（顶部居中，位于工具条下方）
+    this.pageBar = ce('div', 'bp-pagebar');
+    this.pageBar.hidden = true;
+    this.pageBar.setAttribute('role', 'toolbar');
+    this.pageBar.setAttribute('aria-label', '页面');
+    const navBtn = (label, title) => {
+      const b = ce('button', 'btn icon bp-page-nav', label);
+      b.type = 'button';
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      return b;
+    };
+    this.pagePrevBtn = navBtn('‹', '上一页');
+    this.pageNextBtn = navBtn('›', '下一页');
+    this.pageLabelEl = ce('span', 'bp-page-label', '第 1 / 1 页');
+    this.pageAddBtn = ce('button', 'btn bp-page-add', '＋ 添加页');
+    this.pageAddBtn.type = 'button';
+    this.pageAddBtn.title = '在末尾添加一页并跳过去';
+    this.pageDelBtn = ce('button', 'btn bp-page-del', '🗑 删除页');
+    this.pageDelBtn.type = 'button';
+    this.pageDelBtn.title = '删除当前页的纸张（内容不会被删除）';
+    this.pagePrevBtn.addEventListener('click', () => this.setCurPage(this._curPage - 1));
+    this.pageNextBtn.addEventListener('click', () => this.setCurPage(this._curPage + 1));
+    this.pageAddBtn.addEventListener('click', () => this.addPage());
+    this.pageDelBtn.addEventListener('click', () => this.removePage());
+    this.pageBar.append(this.pagePrevBtn, this.pageLabelEl, this.pageNextBtn, this.pageAddBtn, this.pageDelBtn);
+    this.root.appendChild(this.pageBar);
+
     this.toolBtns.get('select').classList.add('bp-on');
     this._syncSwatches();
+    this._syncPageUI();
   }
 
   _buildSelbar() {
@@ -1742,10 +1955,9 @@ export class Board {
     const s = this._view.scale;
     const tx = this._view.x;
     const ty = this._view.y;
-    // 缩得太小 → 网格淡出
+    // 缩得太小 → 网格淡出（纸张仍要画）
     const alpha = clamp((s - 0.12) / 0.3, 0, 1);
-    if (alpha <= 0.01) return;
-
+    if (alpha > 0.01) {
     let step = GRID_BASE;
     while (step * s < 16) step *= 2;
     while (step * s > 110 && step > 8) step /= 2;
@@ -1800,6 +2012,48 @@ export class Board {
       }
     }
     ctx.fill();
+    }
+
+    // A4 纸张画在点阵之上：页面内是白底，页面外保留点阵
+    if (this._pageMode === 'a4') this._drawPagesOnGrid(ctx);
+  }
+
+  /** 在网格层上绘制 A4 纸张（白底 + 淡阴影 + 页码，当前页边框加深） */
+  _drawPagesOnGrid(ctx) {
+    if (!ctx) return;
+    const s = this._view.scale;
+    const tx = this._view.x;
+    const ty = this._view.y;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    const pages = this.pageRects();
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      const x = p.x * s + tx;
+      const y = p.y * s + ty;
+      const w = p.w * s;
+      const h = p.h * s;
+      if (x > this.w + 40 || y > this.h + 40 || x + w < -40 || y + h < -40) continue;
+      // 淡阴影
+      ctx.fillStyle = 'rgba(31,35,41,0.09)';
+      ctx.fillRect(x + 4, y + 6, w, h);
+      // 纸张白底
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, w, h);
+      // 边框（当前页加深）
+      const cur = i === this._curPage;
+      ctx.strokeStyle = cur ? 'rgba(47,109,246,0.85)' : 'rgba(31,35,41,0.22)';
+      ctx.lineWidth = cur ? 2 : 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1));
+      // 页码标签
+      ctx.fillStyle = cur ? 'rgba(47,109,246,0.95)' : 'rgba(31,35,41,0.38)';
+      const fs = clamp(Math.round(12 * Math.min(1.4, Math.max(0.8, s))), 9, 18);
+      ctx.font = `${fs}px ${FONT_STACK}`;
+      ctx.fillText(`第 ${i + 1} 页`, x + 8, y - 4);
+    }
+    ctx.restore();
   }
 
   drawInk() {
@@ -2288,7 +2542,7 @@ export class Board {
   _onPointerDown(e) {
     if (this._destroyed) return;
     const t = e.target;
-    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu'))) return;
+    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu') || t.closest('.bp-pagebar'))) return;
 
     // 文字编辑中：点到编辑区内部就让浏览器处理光标；点到别处先提交
     if (this.editingId) {
@@ -2326,6 +2580,14 @@ export class Board {
 
     // 非选择工具按到已有元素：只提示一次（空白处按下不提示，仍按原工具工作）
     if (hit && hit.type !== 'stroke') this._hintToolOnElement();
+
+    // A4 模式：点某页的空白处 → 该页成为当前页（点到元素则正常选中，不改页）
+    if (this._pageMode === 'a4' && !hit && this.tool === 'select') {
+      const pages = this.pageRects();
+      for (let i = 0; i < pages.length; i++) {
+        if (i !== this._curPage && pointInRect(wp.x, wp.y, pages[i])) { this.setCurPage(i, { reveal: false }); break; }
+      }
+    }
 
     if (this.tool === 'pen' || this.tool === 'highlighter') {
       this._startStroke(e, wp);
@@ -2366,7 +2628,7 @@ export class Board {
   _onDoubleClick(e) {
     if (this._destroyed) return;
     const t = e.target;
-    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu'))) return;
+    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu') || t.closest('.bp-pagebar'))) return;
     if (this.tool === 'pen' || this.tool === 'highlighter' || this.tool === 'eraser') return;
 
     const p = this._localPoint(e);
@@ -3581,9 +3843,13 @@ export class Board {
       this._view = { x: clean.view.x, y: clean.view.y, scale: clean.view.scale };
     }
     this.items = clean.items;
+    this._pageMode = clean.pageMode;
+    this._pageCount = clean.pageCount;
+    this._curPage = clean.curPage;
     this.selected.clear();
     this._renderAll();
     this._applyView();
+    this._syncPageUI();
     return true;
   }
 
@@ -3656,6 +3922,9 @@ export class Board {
     const clean = sanitizeData(raw);
     this.items = clean.items;
     this._view = { x: clean.view.x, y: clean.view.y, scale: clean.view.scale };
+    this._pageMode = clean.pageMode;
+    this._pageCount = clean.pageCount;
+    this._curPage = clean.curPage;
     return clean;
   }
 
