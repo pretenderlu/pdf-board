@@ -30,6 +30,8 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
 const GRID_BASE = 24;                // 网格基准间距（世界坐标）
 const SAVE_DELAY = 500;              // 自动保存防抖
+const ARRANGE_GAP = 24;              // 排列统一间距（世界像素）
+const ARRANGE_ROW_TOL = 14;          // 阅读顺序判定「同一行」的 y 容差（约半行高）
 const TEXT_COLOR = '#1f2329';
 const MAX_TEXT_WIDTH = 460;          // 文字元素自动排版的最大宽度（世界坐标）
 const MIN_TEXT_WIDTH = 40;
@@ -303,6 +305,7 @@ const ICON = {
   minus: '<path d="M5 12h14"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
   fit: '<path d="M4 9V5.6A1.6 1.6 0 0 1 5.6 4H9"/><path d="M15 4h3.4A1.6 1.6 0 0 1 20 5.6V9"/><path d="M20 15v3.4a1.6 1.6 0 0 1-1.6 1.6H15"/><path d="M9 20H5.6A1.6 1.6 0 0 1 4 18.4V15"/>',
+  arrange: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/>',
   trash: '<path d="M4.5 7h15"/><path d="M9.5 7V5.3A1.3 1.3 0 0 1 10.8 4h2.4a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="M6.8 7l.8 11.2A1.9 1.9 0 0 0 9.5 20h5a1.9 1.9 0 0 0 1.9-1.8L17.2 7"/>',
   toFront: '<path d="M12 20V8"/><path d="M8 12l4-4 4 4"/><path d="M4.5 4.5h15"/>',
   toBack: '<path d="M12 4v12"/><path d="M8 12l4 4 4-4"/><path d="M4.5 19.5h15"/>',
@@ -987,6 +990,277 @@ export class Board {
     this.scheduleSave();
   }
 
+  /* ---------------------- 一键排列 / 对齐 ---------------------- */
+
+  /** 排列按钮可用状态（白板为空时禁用） */
+  _syncArrangeBtn() {
+    if (!this.arrangeBtn) return;
+    const empty = this.items.length === 0;
+    this.arrangeBtn.disabled = empty;
+    if (empty) this._closeArrangeMenu();
+  }
+
+  _toggleArrangeMenu() {
+    if (!this.arrangeMenu) return;
+    if (!this.arrangeMenu.hidden) { this._closeArrangeMenu(); return; }
+    if (!this.items.length) return;
+    this._syncArrangeBtn();
+    const rr = this.root.getBoundingClientRect();
+    const br = this.arrangeBtn.getBoundingClientRect();
+    const left = Math.max(8, br.left - rr.left);
+    const top = br.bottom - rr.top + 6;
+    this.arrangeMenu.style.left = Math.round(left) + 'px';
+    this.arrangeMenu.style.top = Math.round(top) + 'px';
+    this.arrangeMenu.hidden = false;
+    this.arrangeBtn.classList.add('bp-on');
+  }
+
+  _closeArrangeMenu({ restoreFocus = false } = {}) {
+    if (!this.arrangeMenu) return;
+    this.arrangeMenu.hidden = true;
+    if (this.arrangeBtn) this.arrangeBtn.classList.remove('bp-on');
+    // 菜单项/菜单关闭后焦点会落到 body，键盘快捷键（Ctrl+Z、Delete、V/P…）就失效了，
+    // 所以执行完动作或按 Esc 收起时把焦点还给画布，避免"一键排列后按不了 Ctrl+Z"。
+    if (restoreFocus) {
+      try { this.root.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * 一键排列 / 对齐（一次排列 = 一次撤销）。
+   * @param {'alignLeft'|'alignTop'|'vertical'|'horizontal'|'grid'|'twoCols'|'mindmap'} kind
+   * @returns {boolean} 是否真的移动了元素
+   */
+  arrange(kind) {
+    if (this._destroyed) return false;
+    if (this.editingId) this.commitEdit();
+
+    const sel = [...this.selected];
+    let pool;
+    if (sel.length >= 2) pool = sel;                 // 只排选中的
+    else if (sel.length === 1) return false;         // 只选中 1 个：不动
+    else pool = this.items.map((it) => it.id);       // 没选中：排全部
+    if (pool.length < 2) return false;
+
+    const poolIds = new Set(pool);
+    const layout = [];
+    for (const id of pool) {
+      const it = this.get(id);
+      if (!it) continue;
+      // 归属父元素的笔画跟着父元素走（父元素也在本次排列范围内），不单独排
+      if (it.type === 'stroke' && it.parentId && poolIds.has(it.parentId)) continue;
+      layout.push(it);
+    }
+    if (layout.length < 2) return false;
+
+    const bbox = (it) => this._itemBBox(it);
+    // 阅读顺序：y 升序；y 接近（< 半行高）时按 x 升序（Array#sort 稳定）
+    const order = layout.slice().sort((a, b) => {
+      const A = bbox(a);
+      const B = bbox(b);
+      if (Math.abs(A.y - B.y) < ARRANGE_ROW_TOL) return A.x - B.x;
+      return A.y - B.y;
+    });
+
+    // 锚点：集合外接框左上角（思维导图不用它，中心节点保持原位）
+    let ax = Infinity;
+    let ay = Infinity;
+    for (const it of order) {
+      const b = bbox(it);
+      if (b.x < ax) ax = b.x;
+      if (b.y < ay) ay = b.y;
+    }
+
+    const gap = ARRANGE_GAP;
+    const targets = new Map();     // id -> {x, y}
+    const setTarget = (it, x, y) => targets.set(it.id, { x, y });
+
+    if (kind === 'alignLeft') {
+      for (const it of order) setTarget(it, ax, it.y);
+    } else if (kind === 'alignTop') {
+      for (const it of order) setTarget(it, it.x, ay);
+    } else if (kind === 'vertical') {
+      let y = ay;
+      for (const it of order) { setTarget(it, ax, y); y += bbox(it).h + gap; }
+    } else if (kind === 'horizontal') {
+      let x = ax;
+      for (const it of order) { setTarget(it, x, ay); x += bbox(it).w + gap; }
+    } else if (kind === 'grid') {
+      const cols = Math.max(1, Math.ceil(Math.sqrt(order.length)));
+      let maxW = 0;
+      let maxH = 0;
+      for (const it of order) {
+        const b = bbox(it);
+        if (b.w > maxW) maxW = b.w;
+        if (b.h > maxH) maxH = b.h;
+      }
+      const colW = maxW + gap;
+      const rowH = maxH + gap;
+      order.forEach((it, i) => {
+        setTarget(it, ax + (i % cols) * colW, ay + Math.floor(i / cols) * rowH);
+      });
+    } else if (kind === 'twoCols') {
+      // 按顺序累加高度，取最接近「总高一半」的位置分列
+      const total = order.reduce((sum, it, i) => sum + bbox(it).h + (i ? gap : 0), 0);
+      const half = total / 2;
+      let split = 1;
+      let best = Infinity;
+      let acc = 0;
+      for (let k = 0; k < order.length - 1; k++) {
+        acc += bbox(order[k]).h + (k ? gap : 0);
+        const diff = Math.abs(acc - half);
+        if (diff < best) { best = diff; split = k + 1; }
+      }
+      const col1 = order.slice(0, split);
+      const col2 = order.slice(split);
+      let maxW1 = 0;
+      for (const it of col1) maxW1 = Math.max(maxW1, bbox(it).w);
+      let y1 = ay;
+      for (const it of col1) { setTarget(it, ax, y1); y1 += bbox(it).h + gap; }
+      let y2 = ay;
+      for (const it of col2) { setTarget(it, ax + maxW1 + gap, y2); y2 += bbox(it).h + gap; }
+    } else if (kind === 'mindmap') {
+      // 放射状：中心节点不动，其余等角度分布在环上（起始 -90° 正上方，顺时针）
+      const center = order[0];
+      const cb = bbox(center);            // 中心节点位置不变
+      const rootCx = cb.x + cb.w / 2;
+      const rootCy = cb.y + cb.h / 2;
+      const sats = order.slice(1);
+      const sn = sats.length;
+      const satBoxes = sats.map(bbox);
+      let maxItemW = 0;
+      let maxItemH = 0;
+      for (const b of satBoxes) {
+        if (b.w > maxItemW) maxItemW = b.w;
+        if (b.h > maxItemH) maxItemH = b.h;
+      }
+
+      const boxesOverlap = (a, b) => {
+        const ix = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+        const iy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+        return ix > 0.5 && iy > 0.5;
+      };
+
+      if (sn === 1) {
+        // 单个：放右侧（θ=0°），避免孤零零跑到正上方
+        const b = satBoxes[0];
+        setTarget(sats[0], cb.x + cb.w + gap, rootCy - b.h / 2);
+      } else if (sn === 2) {
+        // 两个：左右各一个（θ=0°、180°）
+        const b0 = satBoxes[0];
+        const b1 = satBoxes[1];
+        setTarget(sats[0], cb.x + cb.w + gap, rootCy - b0.h / 2);
+        setTarget(sats[1], cb.x - gap - b1.w, rootCy - b1.h / 2);
+      } else {
+        // 半径：不压中心（Rbase）+ 环上周长不挤（Rcirc）
+        const maxItemSize = Math.max(maxItemW, maxItemH);
+        const Rbase = Math.max(cb.w, cb.h) / 2 + gap + maxItemSize / 2;
+        const Rcirc = ((maxItemW + gap) * sn) / (2 * Math.PI);
+        const R = Math.max(Rbase, Rcirc);
+
+        const placeRing = (list, radius, startDeg) => {
+          list.forEach((it, i) => {
+            const b = bbox(it);
+            const deg = startDeg + (i * 360) / Math.max(1, list.length);
+            const rad = (deg * Math.PI) / 180;
+            setTarget(it, rootCx + radius * Math.cos(rad) - b.w / 2, rootCy + radius * Math.sin(rad) - b.h / 2);
+          });
+        };
+        placeRing(sats, R, -90);
+
+        // 兜底：元素多（n≥9）且环上仍重叠 → 内外两圈交替
+        if (sn >= 9) {
+          const placed = sats.map((it) => {
+            const t = targets.get(it.id);
+            const b = bbox(it);
+            return { x: t.x, y: t.y, w: b.w, h: b.h };
+          });
+          let overlap = false;
+          for (let i = 0; i < placed.length && !overlap; i++) {
+            for (let j = i + 1; j < placed.length; j++) {
+              if (boxesOverlap(placed[i], placed[j])) { overlap = true; break; }
+            }
+          }
+          if (overlap) {
+            const outer = [];
+            const inner = [];
+            sats.forEach((it, i) => { (i % 2 === 0 ? outer : inner).push(it); });
+            const Rout = R + maxItemSize + gap;
+            placeRing(outer, Rout, -90);
+            placeRing(inner, R, -90);
+          }
+        }
+      }
+    } else {
+      return false;
+    }
+
+    // 先算位移；全都没动就不记历史（单元素/已排好时 no-op）
+    const moves = [];
+    for (const [id, t] of targets) {
+      const it = this.get(id);
+      if (!it) continue;
+      const nx = Math.round(t.x);
+      const ny = Math.round(t.y);
+      const dx = nx - Math.round(it.x);
+      const dy = ny - Math.round(it.y);
+      if (!dx && !dy) continue;
+      moves.push({ it, nx, ny, dx, dy });
+    }
+    if (!moves.length) return false;
+
+    this._record('arrange');        // 一次排列 = 一次撤销（快照在改动/解绑之前）
+
+    const dxMap = new Map();
+    for (const m of moves) {
+      m.it.x = m.nx;
+      m.it.y = m.ny;
+      this._syncItem(m.it);
+      dxMap.set(m.it.id, { dx: m.dx, dy: m.dy });
+    }
+    // 绑定批注跟随父元素平移
+    for (const it of this.items) {
+      if (it.type !== 'stroke' || !it.parentId) continue;
+      const d = dxMap.get(it.parentId);
+      if (!d) continue;
+      it.points = it.points.map((p) => ({ x: p.x + d.dx, y: p.y + d.dy }));
+      it.bbox = { x: it.bbox.x + d.dx, y: it.bbox.y + d.dy, w: it.bbox.w, h: it.bbox.h };
+    }
+    // 被单独排布的绑定笔画：解绑（避免之后又跟着原父元素走）——已包含在撤销快照里
+    for (const m of moves) {
+      if (m.it.type === 'stroke' && m.it.parentId) m.it.parentId = null;
+    }
+
+    this.drawInk();
+    this.renderSelection();
+    this.scheduleSave();
+
+    // 结果完全在视口外时平移视图（不改缩放）
+    let ux = Infinity;
+    let uy = Infinity;
+    let ux2 = -Infinity;
+    let uy2 = -Infinity;
+    for (const it of layout) {
+      const b = this._itemBBox(it);
+      if (b.x < ux) ux = b.x;
+      if (b.y < uy) uy = b.y;
+      if (b.x + b.w > ux2) ux2 = b.x + b.w;
+      if (b.y + b.h > uy2) uy2 = b.y + b.h;
+    }
+    for (const it of this.items) {
+      if (it.type !== 'stroke' || !it.parentId || !dxMap.has(it.parentId)) continue;
+      const b = this._itemBBox(it);
+      if (b.x < ux) ux = b.x;
+      if (b.y < uy) uy = b.y;
+      if (b.x + b.w > ux2) ux2 = b.x + b.w;
+      if (b.y + b.h > uy2) uy2 = b.y + b.h;
+    }
+    if (Number.isFinite(ux)) {
+      this._revealRect({ x: ux, y: uy, w: Math.max(1, ux2 - ux), h: Math.max(1, uy2 - uy) });
+    }
+    return true;
+  }
+
   destroy() {
     if (this._destroyed) return;
     this._cancelEditNoCommit();
@@ -1122,6 +1396,38 @@ export class Board {
     fitBtn.innerHTML = svgIcon(ICON.fit) + '<span>适应内容</span>';
     fitBtn.addEventListener('click', () => this.fitContent());
 
+    // 「排列」下拉菜单：对齐 + 排布
+    this.arrangeBtn = ce('button', 'btn bp-arrange');
+    this.arrangeBtn.type = 'button';
+    this.arrangeBtn.title = '一键排列 / 对齐';
+    this.arrangeBtn.setAttribute('aria-haspopup', 'menu');
+    this.arrangeBtn.innerHTML = svgIcon(ICON.arrange) + '<span>排列</span><span class="bp-caret">▾</span>';
+    this.arrangeBtn.addEventListener('click', (e) => {
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      this._toggleArrangeMenu();
+    });
+
+    this.arrangeMenu = ce('div', 'bp-menu');
+    this.arrangeMenu.hidden = true;
+    this.arrangeMenu.setAttribute('role', 'menu');
+    this.arrangeMenu.appendChild(ce('div', 'bp-menu-hint', '未选中时排列全部内容'));
+    const menuGroups = [
+      ['对齐', [['alignLeft', '左对齐'], ['alignTop', '顶部对齐']]],
+      ['排布', [['vertical', '竖向排列'], ['horizontal', '横向排列'], ['grid', '网格排列'], ['twoCols', '两列排列'], ['mindmap', '思维导图']]],
+    ];
+    for (const [title, entries] of menuGroups) {
+      this.arrangeMenu.appendChild(ce('div', 'bp-menu-group', title));
+      for (const [kind, label] of entries) {
+        const b = ce('button', 'bp-menu-item', label);
+        b.type = 'button';
+        b.dataset.kind = kind;
+        b.setAttribute('role', 'menuitem');
+        b.addEventListener('click', () => { this._closeArrangeMenu({ restoreFocus: true }); this.arrange(kind); });
+        this.arrangeMenu.appendChild(b);
+      }
+    }
+    this.root.appendChild(this.arrangeMenu);
+
     this.clearBtn = ce('button', 'btn icon bp-clear');
     this.clearBtn.type = 'button';
     this.clearBtn.title = '清空白板（需要点两次确认）';
@@ -1140,9 +1446,10 @@ export class Board {
       this.savedEl.title = '保存状态由外部控制';
     }
 
-    bar.append(zOut, this.zoomEl, zIn, fitBtn, this.clearBtn, this.savedEl);
+    bar.append(zOut, this.zoomEl, zIn, fitBtn, this.arrangeBtn, this.clearBtn, this.savedEl);
     this.toolbar = bar;
     this.root.appendChild(bar);
+    this._syncArrangeBtn();
 
     this.toolBtns.get('select').classList.add('bp-on');
     this._syncSwatches();
@@ -1224,6 +1531,14 @@ export class Board {
     window.addEventListener('pagehide', flush, { signal: sig });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') flush();
+    }, { signal: sig });
+
+    // 点空白处 / 别的控件时收起「排列」菜单
+    document.addEventListener('pointerdown', (e) => {
+      if (!this.arrangeMenu || this.arrangeMenu.hidden) return;
+      const t = e.target;
+      if (this.arrangeMenu.contains(t) || (this.arrangeBtn && this.arrangeBtn.contains(t))) return;
+      this._closeArrangeMenu();
     }, { signal: sig });
   }
 
@@ -1559,6 +1874,7 @@ export class Board {
     if (!this.emptyEl) return;
     const waitingRestore = !this._dbReady && !this._touched;
     this.emptyEl.hidden = this.items.length > 0 || waitingRestore;
+    this._syncArrangeBtn();
   }
 
   _createEl(it) {
@@ -1793,7 +2109,7 @@ export class Board {
   _onPointerDown(e) {
     if (this._destroyed) return;
     const t = e.target;
-    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar'))) return;
+    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu'))) return;
 
     // 文字编辑中：点到编辑区内部就让浏览器处理光标；点到别处先提交
     if (this.editingId) {
@@ -1871,7 +2187,7 @@ export class Board {
   _onDoubleClick(e) {
     if (this._destroyed) return;
     const t = e.target;
-    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar'))) return;
+    if (t && t.closest && (t.closest('.bp-toolbar') || t.closest('.bp-selbar') || t.closest('.bp-menu'))) return;
     if (this.tool === 'pen' || this.tool === 'highlighter' || this.tool === 'eraser') return;
 
     const p = this._localPoint(e);
@@ -2529,6 +2845,7 @@ export class Board {
         return;
       case 'Escape':
         e.preventDefault();
+        if (this.arrangeMenu && !this.arrangeMenu.hidden) { this._closeArrangeMenu({ restoreFocus: true }); return; }
         this._onEscape();
         return;
       case 'ArrowLeft':
