@@ -1,0 +1,8 @@
+# Vercel 部署时不需要上传的东西（纯静态托管只需 index.html + css + js + vendor）
+data/
+server.mjs
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.cmd
+docs/

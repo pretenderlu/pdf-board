@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF 摘录白板</title>
+<link rel="stylesheet" href="./css/app.css">
+<link rel="stylesheet" href="./css/pdf-pane.css">
+<link rel="stylesheet" href="./css/board.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="7.5" height="18" rx="1.6"/>
+      <path d="M14 7.5h6.2M14 12h6.2M14 16.5h4"/>
+      <path d="M6.7 8.5v7" opacity=".45"/>
+    </svg>
+    <span>PDF 摘录白板</span>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <button id="btnOpenPdf" class="btn primary" title="打开 PDF（Ctrl+O）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5z"/></svg>
+      打开 PDF
+    </button>
+    <span id="pdfName" class="pdf-name">未打开文件</span>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group board-bar" id="boardBar" hidden>
+    <span class="tb-label">白板</span>
+    <select id="boardSelect" class="board-select" title="切换白板"></select>
+    <span id="boardState" class="board-state"></span>
+    <button id="btnNewBoard" class="btn icon" title="新建一块白板">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button id="btnRenameBoard" class="btn icon" title="重命名当前白板">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M13.5 6.5l3 3"/></svg>
+    </button>
+    <button id="btnDeleteBoard" class="btn icon" title="删除当前白板">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6.5 7l.9 12.2A1.6 1.6 0 0 0 9 20.7h6a1.6 1.6 0 0 0 1.6-1.5L17.5 7"/><path d="M10 11v6M14 11v6"/></svg>
+    </button>
+  </div>
+  <div class="tb-spacer"></div>
+  <div class="tb-group">
+    <button id="btnSaveBoard" class="btn" title="把白板保存为 .json 文件">保存白板</button>
+    <button id="btnOpenBoard" class="btn" title="读取 .json 白板文件">读取白板</button>
+    <div class="tb-export" id="tbExport">
+      <button id="btnExport" class="btn" aria-haspopup="menu" aria-expanded="false" title="把整块白板导出">
+        导出
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="export-menu" id="exportMenu" role="menu" hidden>
+        <button class="export-item" id="btnExportPng" role="menuitem">导出为 PNG 图片</button>
+        <button class="export-item" id="btnExportPdf" role="menuitem">导出为 PDF（A4 分页）</button>
+      </div>
+    </div>
+    <button id="btnHelp" class="btn icon" title="快捷键" aria-label="快捷键">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 1 1 3.4 2.5c-.6.25-.9.75-.9 1.4v.35"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="split">
+  <section id="pdfPane" class="pane pdf-pane" aria-label="PDF 阅读区"></section>
+  <div id="gutter" class="gutter" role="separator" aria-orientation="vertical" title="拖动调整宽度，双击复位">
+    <span class="gutter-grip"></span>
+  </div>
+  <section id="boardPane" class="pane board-pane" aria-label="白板"></section>
+</main>
+
+<div id="dropMask" class="drop-mask" hidden><div class="drop-inner"><strong>松开鼠标</strong><span>打开这个 PDF</span></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<input type="file" id="filePdf" accept="application/pdf,.pdf" hidden>
+<input type="file" id="fileBoard" accept=".json,application/json" hidden>
+
+<dialog id="helpDlg" class="help-dlg">
+  <div class="help-head">
+    <h2>快捷键与操作</h2>
+    <button class="btn icon" id="btnHelpClose" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="help-body">
+    <section>
+      <h3>左侧 PDF</h3>
+      <ul>
+        <li><kbd>拖动</kbd> 在页面上框选区域</li>
+        <li><kbd>→ 贴到白板</kbd> 或 <kbd>Ctrl</kbd>+<kbd>C</kbd> 后到右侧 <kbd>Ctrl</kbd>+<kbd>V</kbd></li>
+        <li><kbd>←</kbd> <kbd>→</kbd> 翻页 · <kbd>+</kbd> <kbd>-</kbd> 缩放 · <kbd>Esc</kbd> 取消选区</li>
+        <li><kbd>Ctrl</kbd>+<kbd>O</kbd> 打开 PDF（也可把 PDF 拖进窗口）</li>
+      </ul>
+    </section>
+    <section>
+      <h3>右侧白板</h3>
+      <ul>
+        <li><kbd>空格</kbd>+拖动 / 中键 / 右键拖动：平移 · <kbd>Ctrl</kbd>+滚轮：缩放 · 滚轮：上下</li>
+        <li><kbd>V</kbd> 选择 <kbd>P</kbd> 画笔 <kbd>H</kbd> 荧光笔 <kbd>E</kbd> 橡皮 <kbd>T</kbd> 文字</li>
+        <li>画笔/荧光笔：点工具条上的色块换颜色（<kbd>1</kbd>–<kbd>6</kbd> 也可）</li>
+        <li>画在题图上的批注会跟着题图移动/缩放；<kbd>Alt</kbd>+点击 可单独选中批注再拖走</li>
+        <li><kbd>双击空白</kbd> 新建文字 · <kbd>双击元素</kbd> 编辑文字</li>
+        <li><kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴（PDF 框选图 / 系统剪贴板图片）</li>
+        <li><kbd>Delete</kbd> 删除 · <kbd>Ctrl</kbd>+<kbd>D</kbd> 复制 · <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销 · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> 重做</li>
+        <li><kbd>Ctrl</kbd>+<kbd>A</kbd> 全选 · 方向键微调（<kbd>Shift</kbd> 加大）</li>
+        <li><kbd>Ctrl</kbd>+<kbd>]</kbd> 置顶 · <kbd>Ctrl</kbd>+<kbd>[</kbd> 置底</li>
+      </ul>
+    </section>
+    <section>
+      <h3>数据</h3>
+      <ul>
+        <li id="helpStorage">白板自动保存，刷新不丢</li>
+        <li>「保存白板 / 读取白板」用 .json 换机器或做备份</li>
+        <li>「导出」可以存成 PNG 图片或 A4 分页 PDF</li>
+      </ul>
+    </section>
+  </div>
+</dialog>
+
+<dialog id="promptDlg" class="prompt-dlg">
+  <form method="dialog">
+    <h3 id="promptTitle">重命名白板</h3>
+    <p id="promptMsg" class="prompt-msg" hidden></p>
+    <input id="promptInput" type="text" maxlength="80" autocomplete="off" spellcheck="false">
+    <div class="prompt-actions">
+      <button value="cancel" class="btn" type="submit">取消</button>
+      <button value="ok" class="btn primary" type="submit" id="promptOk">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

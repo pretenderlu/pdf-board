@@ -1,0 +1,260 @@
+/* ============================================================
+   pdf-pane.css — 左侧 PDF 阅读器样式（pdf-engine 维护）
+   类名统一前缀 .pdfp- ；颜色 / 圆角 / 阴影全部取自 css/app.css 的设计令牌
+   ============================================================ */
+
+/* ---------- 根容器 ---------- */
+.pdfp-root{
+  position:relative;
+  display:flex; flex-direction:column;
+  flex:1 1 auto;
+  height:100%; width:100%; min-height:0; min-width:0;
+  overflow:hidden;
+  background:var(--bg);
+  color:var(--text);
+}
+.pdfp-root:focus{ outline:none; }
+
+/* ---------- 工具条 ---------- */
+.pdfp-toolbar{
+  flex:0 0 40px; height:40px;
+  display:flex; align-items:center; gap:6px;
+  padding:0 8px;
+  background:var(--panel);
+  border-bottom:1px solid var(--line);
+  position:relative; z-index:6;
+}
+.pdfp-tb-group{ display:flex; align-items:center; gap:4px; min-width:0; }
+.pdfp-tb-group button{ flex:0 0 auto; }
+.pdfp-tb-spacer{ flex:1 1 auto; }
+.pdfp-sep{ width:1px; height:18px; background:var(--line); margin:0 3px; flex:0 0 auto; }
+
+.pdfp-pageinput{
+  width:70px; height:28px; padding:0 4px;
+  text-align:center;
+  font:12.5px/1 var(--font);
+  color:var(--text);
+  background:var(--panel-2);
+  border:1px solid var(--line-strong);
+  border-radius:var(--radius-sm);
+  outline:none;
+  font-variant-numeric:tabular-nums;
+}
+.pdfp-pageinput:focus{
+  background:var(--panel);
+  border-color:var(--accent);
+  box-shadow:0 0 0 2px var(--accent-weak);
+}
+.pdfp-pageinput:disabled{ opacity:.5; background:var(--panel-2); }
+.pdfp-pageinput::selection{ background:var(--accent-weak); }
+
+.pdfp-pct{
+  min-width:60px;
+  font-variant-numeric:tabular-nums;
+  color:var(--muted);
+}
+
+/* ---------- 主区：滚动容器 + 覆盖层 ---------- */
+.pdfp-main{
+  position:relative;
+  flex:1 1 auto; min-height:0; min-width:0;
+  display:flex;
+}
+.pdfp-viewport{
+  position:relative;
+  flex:1 1 auto; min-width:0; min-height:0;
+  overflow:auto;
+  overflow-anchor:none;      /* 关掉浏览器滚动锚定，位置由代码自己保持 */
+  background:var(--bg);
+  outline:none;
+}
+.pdfp-viewport:focus{ outline:none; }
+
+.pdfp-pages{
+  position:relative;
+  display:flex; flex-direction:column; align-items:center;
+  gap:16px;
+  padding:16px;
+  width:max-content;
+  min-width:100%;
+  margin:0 auto;
+  box-sizing:border-box;
+}
+
+/* ---------- 页面占位 / 画布 ---------- */
+.pdfp-page{
+  position:relative;
+  flex:0 0 auto;
+  background:#fff;
+  border-radius:2px;
+  box-shadow:0 1px 2px rgba(20,26,38,.18), 0 8px 22px rgba(20,26,38,.10);
+  cursor:crosshair;
+  box-sizing:border-box;
+}
+.pdfp-canvas{
+  display:block;
+  width:100%; height:100%;
+  border-radius:2px;
+}
+.pdfp-page-err{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:12.5px;
+  background:var(--panel-2);
+  border-radius:2px;
+  pointer-events:none;
+}
+
+/* ---------- 空状态 ---------- */
+.pdfp-empty{
+  position:absolute; inset:0; z-index:3;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:8px;
+  padding:24px;
+  background:var(--panel);
+  color:var(--muted);
+  text-align:center;
+  /* 覆盖层本身不拦截滚轮，但按钮要能点 */
+}
+.pdfp-empty[hidden]{ display:none; }
+.pdfp-empty svg{ width:64px; height:64px; color:var(--line-strong); }
+.pdfp-empty-title{
+  margin:2px 0 0;
+  font-size:14px; font-weight:600; color:var(--text);
+}
+.pdfp-empty-hint{
+  margin:0;
+  font-size:12.5px; color:var(--muted); max-width:280px; line-height:1.6;
+}
+.pdfp-empty .pdfp-open{ margin-top:10px; }
+
+/* ---------- 加载覆盖层 ---------- */
+.pdfp-loading{
+  position:absolute; inset:0; z-index:8;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:12px;
+  background:rgba(247,248,250,.9);
+  color:var(--muted);
+  font-size:13px;
+  backdrop-filter:blur(1px);
+}
+.pdfp-loading[hidden]{ display:none; }
+.pdfp-loading-text{ font-variant-numeric:tabular-nums; }
+.pdfp-spinner{
+  width:28px; height:28px; border-radius:50%;
+  border:2.5px solid var(--accent-weak);
+  border-top-color:var(--accent);
+  animation:pdfp-spin .8s linear infinite;
+}
+.pdfp-progress{
+  display:block;
+  width:190px; height:4px;
+  border-radius:2px;
+  background:var(--line);
+  overflow:hidden;
+}
+.pdfp-progress-fill{
+  display:block;
+  width:0; height:100%;
+  border-radius:2px;
+  background:var(--accent);
+  transition:width .18s ease;
+}
+@keyframes pdfp-spin{ to{ transform:rotate(360deg); } }
+
+/* ---------- 选区（页面内绝对定位，随页面滚动/缩放） ---------- */
+.pdfp-sel{
+  position:absolute;
+  display:none;
+  box-sizing:border-box;
+  border:1.5px dashed var(--accent);
+  background:rgba(47,109,246,.13);
+  border-radius:1px;
+  pointer-events:none;       /* 选区本身不吃事件，只有手柄可拖 */
+  z-index:5;
+}
+.pdfp-sel.pdfp-on{ display:block; }
+
+/* 8 个手柄：四角 + 四边 */
+.pdfp-h{
+  position:absolute;
+  width:9px; height:9px;
+  box-sizing:border-box;
+  background:#fff;
+  border:1.5px solid var(--accent);
+  border-radius:2px;
+  box-shadow:0 1px 2px rgba(16,22,34,.25);
+  transform:translate(-50%,-50%);
+  pointer-events:auto;
+  touch-action:none;
+}
+.pdfp-h-nw{ left:0;    top:0; }
+.pdfp-h-n { left:50%;  top:0; }
+.pdfp-h-ne{ left:100%; top:0; }
+.pdfp-h-e { left:100%; top:50%; }
+.pdfp-h-se{ left:100%; top:100%; }
+.pdfp-h-s { left:50%;  top:100%; }
+.pdfp-h-sw{ left:0;    top:100%; }
+.pdfp-h-w { left:0;    top:50%; }
+.pdfp-h-nw, .pdfp-h-se{ cursor:nwse-resize; }
+.pdfp-h-ne, .pdfp-h-sw{ cursor:nesw-resize; }
+.pdfp-h-n, .pdfp-h-s{ cursor:ns-resize; }
+.pdfp-h-e, .pdfp-h-w{ cursor:ew-resize; }
+.pdfp-h:hover{ background:var(--accent-weak); }
+
+/* ---------- 选区浮条 ---------- */
+.pdfp-bar{
+  position:absolute;
+  display:none;
+  align-items:center;
+  gap:2px;
+  padding:3px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:8px;
+  box-shadow:var(--shadow);
+  white-space:nowrap;
+  z-index:7;
+}
+.pdfp-bar.pdfp-on{ display:flex; }
+.pdfp-bar-btn{
+  height:26px;
+  padding:0 9px;
+  border:none;
+  border-radius:5px;
+  background:transparent;
+  color:var(--text);
+  font:12.5px/1 var(--font);
+  white-space:nowrap;
+  cursor:pointer;
+  transition:background .12s, color .12s;
+}
+.pdfp-bar-btn:hover{ background:var(--panel-2); }
+.pdfp-bar-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+.pdfp-bar-main{
+  background:var(--accent);
+  color:#fff;
+  font-weight:600;
+}
+.pdfp-bar-main:hover{ background:var(--accent-press); }
+.pdfp-bar-btn.pdfp-off{
+  opacity:.45;
+  cursor:not-allowed;
+}
+.pdfp-bar-btn.pdfp-off:hover{ background:transparent; }
+.pdfp-bar-x{
+  width:26px; padding:0;
+  font-size:15px; line-height:1;
+  color:var(--muted);
+}
+.pdfp-bar-x:hover{ color:var(--danger); background:var(--panel-2); }
+.pdfp-bar-spin{
+  display:none;
+  width:12px; height:12px;
+  margin:0 3px 0 2px;
+  border-radius:50%;
+  border:2px solid var(--line);
+  border-top-color:var(--accent);
+  animation:pdfp-spin .7s linear infinite;
+}
+.pdfp-bar.pdfp-busy .pdfp-bar-spin{ display:inline-block; }

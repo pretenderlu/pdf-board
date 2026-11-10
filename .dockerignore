@@ -1,0 +1,7 @@
+data/
+docs/
+node_modules/
+.git/
+*.cmd
+*.log
+.npm-cache/

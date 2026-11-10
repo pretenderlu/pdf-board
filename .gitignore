@@ -1,0 +1,14 @@
+# 运行时数据（白板文件）
+data/
+
+# 依赖（本项目正常情况下没有）
+node_modules/
+
+# 构建/部署产物
+.vercel/
+dist/
+
+# 系统与日志
+.DS_Store
+Thumbs.db
+*.log

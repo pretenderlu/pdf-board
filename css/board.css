@@ -1,0 +1,407 @@
+/* ============================================================
+   board.css — 无限白板（board-engine）
+   所有类名统一前缀 .bp-
+   层级（z-index，自下而上）：网格 0 · 元素(图片/文字) 1 · 笔画 2 · 选中层 3
+                    · 空板提示 4 · 顶部工具条 6 · 浮动小工具条 7
+                    （笔画必须在元素之上，否则贴进来的图会盖住批注）
+   注意：元素层用 CSS transform 承载世界坐标（translate + scale），
+         所以「屏幕尺寸恒定」的东西（角标、边框、圆角等）统一用
+         calc(px * var(--bp-inv)) 反缩放，--bp-inv = 1 / scale。
+   ============================================================ */
+
+/* ---------------- 根 ---------------- */
+.bp-root {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--panel, #fff);
+  color: var(--text, #1f2329);
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: var(--font, "Segoe UI", "Microsoft YaHei UI", sans-serif);
+}
+
+.bp-root:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-weak, #e8effd);
+}
+
+/* ---------------- 画布（网格 / 笔画） ---------------- */
+.bp-grid,
+.bp-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.bp-grid { z-index: 0; }
+/* 笔画层在元素层之上：贴入的图片/文字不能遮住批注 */
+.bp-ink { z-index: 2; }
+
+/* ---------------- 元素层（承载世界坐标） ---------------- */
+.bp-items {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  pointer-events: none;
+  z-index: 1;
+  --bp-inv: 1;
+}
+
+.bp-item {
+  position: absolute;
+  pointer-events: auto;
+  cursor: inherit;
+  box-sizing: border-box;
+}
+
+/* 图片：圆角 + 细边 + 柔和阴影（数值随缩放反算，屏幕上恒定粗细） */
+.bp-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  background: #fff;
+  border-radius: calc(6px * var(--bp-inv));
+  border: calc(1px * var(--bp-inv)) solid rgba(31, 35, 41, 0.13);
+  box-shadow:
+    0 calc(2px * var(--bp-inv)) calc(10px * var(--bp-inv)) rgba(20, 26, 38, 0.16),
+    0 0 calc(1px * var(--bp-inv)) rgba(20, 26, 38, 0.06);
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* P{page} 角标：贴在图片左上角，屏幕尺寸恒定 */
+.bp-badge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: scale(var(--bp-inv));
+  transform-origin: 0 0;
+  padding: 2px 5px;
+  border-radius: calc(6px * var(--bp-inv)) 0 calc(4px * var(--bp-inv)) 0;
+  background: rgba(31, 35, 41, 0.7);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 图片加载失败 */
+.bp-item.bp-broken {
+  background: #f4f5f7;
+  border-radius: calc(6px * var(--bp-inv));
+  outline: calc(1px * var(--bp-inv)) dashed var(--line-strong, #c6ccd6);
+}
+
+.bp-item.bp-broken .bp-img { display: none; }
+
+.bp-item.bp-broken::after {
+  content: "图片无法显示";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: calc(12px * var(--bp-inv));
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+}
+
+/* 文字 */
+.bp-item-text {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--text, #1f2329);
+  outline: none;
+  cursor: inherit;
+}
+
+.bp-item-text[contenteditable="true"],
+.bp-item-text.bp-editing {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  caret-color: var(--accent, #2f6df6);
+  background: rgba(255, 255, 255, 0.6);
+  outline: calc(1.5px * var(--bp-inv)) dashed var(--accent, #2f6df6);
+  outline-offset: calc(3px * var(--bp-inv));
+  border-radius: calc(2px * var(--bp-inv));
+}
+
+/* ---------------- 选中层（屏幕坐标，尺寸恒定） ---------------- */
+.bp-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.bp-ui-sel {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.bp-sel-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent, #2f6df6);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.bp-sel-box.bp-sel-group {
+  border-style: dashed;
+  background: rgba(47, 109, 246, 0.06);
+}
+
+.bp-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid var(--accent, #2f6df6);
+  border-radius: 2px;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(20, 26, 38, 0.28);
+  z-index: 2;
+}
+
+.bp-handle:hover { background: var(--accent-weak, #e8effd); }
+
+.bp-marquee {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--accent, #2f6df6);
+  background: rgba(47, 109, 246, 0.08);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.bp-marquee[hidden] { display: none; }
+
+/* ---------------- 空板提示 ---------------- */
+.bp-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.bp-empty[hidden] { display: none; }
+
+.bp-empty-card {
+  text-align: center;
+  max-width: min(420px, 100%);
+  padding: 18px 26px 20px;
+  border-radius: 14px;
+  border: 1px dashed var(--line-strong, #c6ccd6);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+.bp-empty-art {
+  width: 132px;
+  height: 86px;
+  color: #b7bfca;
+}
+
+.bp-empty-title {
+  margin: 8px 0 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.bp-empty-sub {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted, #6b7280);
+}
+
+/* ---------------- 顶部悬浮工具条 ---------------- */
+.bp-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--line, #dfe3e9);
+  border-radius: var(--radius, 10px);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 6px 20px rgba(20, 26, 38, 0.1);
+  backdrop-filter: blur(8px);
+  cursor: default;
+}
+
+.bp-toolbar .btn {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  flex: 0 0 auto;
+}
+
+.bp-toolbar .btn.icon { width: 28px; padding: 0; }
+
+.bp-toolbar .btn svg { width: 15px; height: 15px; }
+
+.bp-tool.bp-on {
+  background: var(--accent-weak, #e8effd);
+  border-color: var(--accent, #2f6df6);
+  color: var(--accent, #2f6df6);
+}
+
+.bp-tb-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--line, #dfe3e9);
+}
+
+/* 色板：6 个圆形色块（画笔/荧光笔共用，快捷键 1-6） */
+.bp-swatches {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.bp-swatch {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(31, 35, 41, 0.22);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.bp-swatch:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 1px rgba(31, 35, 41, 0.4);
+}
+
+.bp-swatch.bp-on {
+  box-shadow: 0 0 0 2px var(--accent, #2f6df6);
+  transform: scale(1.08);
+}
+
+.bp-swatch:focus-visible {
+  outline: 2px solid var(--accent, #2f6df6);
+  outline-offset: 2px;
+}
+
+.bp-zoom {
+  min-width: 54px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text, #1f2329);
+}
+
+.bp-fit span { margin-left: 1px; }
+
+.bp-clear.bp-danger-armed {
+  gap: 5px;
+  color: #fff;
+  background: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+}
+
+.bp-clear.bp-danger-armed:hover {
+  background: #cf3a3f;
+  border-color: #cf3a3f;
+}
+
+/* 右侧「已保存」淡文字 */
+.bp-saved {
+  margin-left: auto;
+  padding-right: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.bp-saved[data-state="error"] { color: var(--danger, #e5484d); opacity: 1; }
+
+/* ---------------- 选中元素浮动小工具条 ---------------- */
+.bp-selbar {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line, #dfe3e9);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(20, 26, 38, 0.18);
+}
+
+.bp-selbar[hidden] { display: none; }
+
+.bp-selbar .btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #3c4350;
+}
+
+.bp-selbar .btn:hover { background: var(--panel-2, #f7f8fa); }
+.bp-selbar .btn svg { width: 15px; height: 15px; }
+.bp-selbar .btn.bp-danger { color: var(--danger, #e5484d); }
+.bp-selbar .btn.bp-danger:hover { background: #fdecec; }
+
+/* ---------------- 光标状态 ---------------- */
+.bp-root[data-tool="pen"],
+.bp-root[data-tool="highlighter"] { cursor: crosshair; }
+
+.bp-root[data-tool="eraser"] { cursor: cell; }
+
+.bp-root[data-tool="text"] { cursor: text; }
+
+.bp-root[data-tool="select"] .bp-item { cursor: move; }
+
+/* 正在编辑的文字要显示文本光标（覆盖上面的 move） */
+.bp-root[data-tool="select"] .bp-item-text[contenteditable="true"] { cursor: text; }
+
+/* 空格拖拽平移的待命 / 进行中光标（放在工具光标之后以覆盖） */
+.bp-root.bp-space,
+.bp-root.bp-space .bp-item,
+.bp-root.bp-space .bp-item-text { cursor: grab; }
+
+.bp-root.bp-panning,
+.bp-root.bp-panning .bp-item,
+.bp-root.bp-panning .bp-item-text { cursor: grabbing; }
+
+.bp-root.bp-moving .bp-item { cursor: grabbing; }

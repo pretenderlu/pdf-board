@@ -1,0 +1,26 @@
+# PDF 摘录白板 —— 部署到自己的服务器 / NAS
+#
+#   1) 把整个 pdf-board 目录传到服务器
+#   2) docker compose up -d --build
+#   3) 浏览器打开 http://<服务器IP>:7420
+#
+# 白板数据保存在同目录的 ./data/boards/ 下（每块板一个 json），备份直接拷这个目录即可。
+
+services:
+  pdf-board:
+    build: .
+    image: pdf-board:latest
+    container_name: pdf-board
+    restart: unless-stopped
+    ports:
+      - "7420:7420"
+    volumes:
+      - ./data:/data
+    environment:
+      PDFBOARD_HOST: "0.0.0.0"
+      PDFBOARD_DATA: "/data"
+      PDFBOARD_NO_OPEN: "1"
+      # 单块白板体积上限（MB），默认 200
+      PDFBOARD_MAX_MB: "200"
+      # 访问口令（可选）：填了之后打开页面需要在地址后加 ?token=你的口令
+      # PDFBOARD_TOKEN: "换成你想用的口令"
